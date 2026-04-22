@@ -34,7 +34,7 @@ log_requests = true
 log_responses = true
 mask_token = true
 recaptcha_trace = false
-recaptcha_console = false
+recaptcha_console = true
 recaptcha_banner = true
 
 [proxy]
