@@ -2030,7 +2030,8 @@ class FlowClient:
                 service = await BrowserCaptchaService.get_instance(self.db)
                 await service.report_error(
                     browser_id,
-                    error_reason=error_reason or error_message or "upstream_error"
+                    error_reason=error_reason,
+                    error_message=error_message,
                 )
             except Exception:
                 pass

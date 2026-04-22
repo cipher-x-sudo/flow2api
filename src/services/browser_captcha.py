@@ -45,6 +45,35 @@ def _is_running_in_docker() -> bool:
 IS_DOCKER = _is_running_in_docker()
 
 
+def _upstream_recaptcha_token_rejected(combined_error_text: str) -> bool:
+    """Upstream clearly rejected the submitted reCAPTCHA token (safe to rotate headed browser).
+
+    Intentionally strict: generic 'failed' + 'recaptcha' matches too many unrelated errors and
+    caused full browser restarts after otherwise successful solves.
+    """
+    if not combined_error_text or not combined_error_text.strip():
+        return False
+    el = combined_error_text.lower()
+    if "recaptcha" not in el and "re-captcha" not in el:
+        return False
+    # Local solver / transport — do not treat as token rejection from Google.
+    if "failed to obtain" in el or "obtain recaptcha" in el:
+        return False
+    needles = (
+        "recaptcha evaluation failed",
+        "recaptcha verification failed",
+        "recaptcha check failed",
+        "recaptcha token invalid",
+        "invalid recaptcha",
+        "invalid_recaptcha",
+        "recaptcha_invalid",
+        "assessment failed",
+        "verification failed",
+        "验证失败",
+    )
+    return any(n in el for n in needles)
+
+
 def _is_truthy_env(name: str) -> bool:
     """判断环境变量是否为 true。"""
     value = os.environ.get(name, "")
@@ -2115,30 +2144,33 @@ class BrowserCaptchaService:
                 return None
             return browser.get_last_fingerprint()
 
-    async def report_error(self, browser_ref: Optional[Union[int, str]] = None, error_reason: Optional[str] = None):
-        """Handle upstream errors; recycle the browser only for explicit reCAPTCHA evaluation failures."""
+    async def report_error(
+        self,
+        browser_ref: Optional[Union[int, str]] = None,
+        error_reason: Optional[str] = None,
+        error_message: Optional[str] = None,
+    ):
+        """Handle upstream errors; recycle the headed browser only when the token was rejected upstream."""
         browser_id, _ = self._parse_browser_ref(browser_ref)
+
+        combined = " ".join(
+            s.strip() for s in (error_reason or "", error_message or "") if (s or "").strip()
+        ).strip()
 
         async with self._browsers_lock:
             browser = self._browsers.get(browser_id) if browser_id is not None else None
-            error_lower = (error_reason or "").lower()
-            has_recaptcha = "recaptcha" in error_lower
-            should_recycle = has_recaptcha and (
-                "evaluation failed" in error_lower
-                or "verification failed" in error_lower or "验证失败" in (error_reason or "")
-                or "failed" in error_lower
-            )
+            should_recycle = _upstream_recaptcha_token_rejected(combined)
             if should_recycle:
                 self._stats["api_403"] += 1
             if browser_id is not None:
                 debug_logger.log_info(
-                    f"[BrowserCaptcha] browser {browser_id} failure reported, reason={error_reason or 'unknown'}, recycle={should_recycle}"
+                    f"[BrowserCaptcha] browser {browser_id} failure reported, reason={(combined or 'unknown')[:240]}, recycle={should_recycle}"
                 )
 
         if browser and should_recycle:
             try:
                 await browser.recycle_browser(
-                    reason=error_reason or "recaptcha_evaluation_failed",
+                    reason=(combined[:200] if combined else None) or "recaptcha_evaluation_failed",
                     rotate_profile=True,
                 )
             except Exception as e:
