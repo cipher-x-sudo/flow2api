@@ -206,8 +206,43 @@ else:
             print(f"[BrowserCaptcha] ❌ playwright 导入失败: {e}")
 
 
-# 配置
-LABS_URL = "https://labs.google/fx/tools/flow"
+# browser 模式默认打码页（本地注入 enterprise.js，负载低）
+BROWSER_CAPTCHA_DEFAULT_PAGE_URL = "https://labs.google/fx/api/auth/providers"
+
+
+def _normalize_browser_captcha_page_url(raw: Optional[str]) -> str:
+    u = (raw or "").strip()
+    return u if u else BROWSER_CAPTCHA_DEFAULT_PAGE_URL
+
+
+def _browser_captcha_is_stub_providers_page(page_url: str) -> bool:
+    return (
+        _normalize_browser_captcha_page_url(page_url).rstrip("/").lower()
+        == BROWSER_CAPTCHA_DEFAULT_PAGE_URL.rstrip("/").lower()
+    )
+
+
+def _captcha_real_page_host_allowed(host: str, page_host: str) -> bool:
+    """真实页面打码时放行请求的主机名（目标站 + Google reCAPTCHA 相关域）。"""
+    h = (host or "").lower()
+    ph = (page_host or "").lower()
+    if not h:
+        return False
+    if ph and (h == ph or h.endswith("." + ph)):
+        return True
+    for suffix in (
+        ".google.com",
+        ".gstatic.com",
+        ".googleapis.com",
+        ".recaptcha.net",
+        ".googleusercontent.com",
+    ):
+        if h.endswith(suffix):
+            return True
+    if h in ("localhost", "127.0.0.1"):
+        return True
+    return False
+
 
 # ==========================================
 # 代理解析工具函数
@@ -1109,21 +1144,38 @@ class TokenBrowser:
         """在给定 context 中执行打码逻辑"""
         page = None
         try:
+            page_url_cfg = BROWSER_CAPTCHA_DEFAULT_PAGE_URL
+            if self.db:
+                try:
+                    cc = await self.db.get_captcha_config()
+                    page_url_cfg = _normalize_browser_captcha_page_url(
+                        getattr(cc, "browser_captcha_page_url", None)
+                    )
+                except Exception:
+                    page_url_cfg = _normalize_browser_captcha_page_url(None)
+            else:
+                page_url_cfg = _normalize_browser_captcha_page_url(
+                    getattr(config, "browser_captcha_page_url", None)
+                )
+
+            use_stub = _browser_captcha_is_stub_providers_page(page_url_cfg)
+
             page = await context.new_page()
             await page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined});")
             debug_logger.log_recaptcha_state_reset()
 
-            # 使用更简单的 API 地址，避免加载复杂页面
-            page_url = "https://labs.google/fx/api/auth/providers"
             primary_host = "https://www.recaptcha.net" if self._browser_proxy_active else "https://www.google.com"
             secondary_host = "https://www.google.com" if primary_host == "https://www.recaptcha.net" else "https://www.recaptcha.net"
-            debug_logger.log_info(
-                f"[BrowserCaptcha] Token-{self.token_id} 加载 enterprise.js: primary={primary_host}, secondary={secondary_host}"
-            )
-            
-            async def handle_route(route):
-                if route.request.url.rstrip('/') == page_url.rstrip('/'):
-                    html = f"""<html><head><script>
+
+            if use_stub:
+                page_url = BROWSER_CAPTCHA_DEFAULT_PAGE_URL
+                debug_logger.log_info(
+                    f"[BrowserCaptcha] Token-{self.token_id} 打码页(轻量): {page_url}, enterprise.js: primary={primary_host}, secondary={secondary_host}"
+                )
+
+                async def handle_route(route):
+                    if route.request.url.rstrip("/") == page_url.rstrip("/"):
+                        html = f"""<html><head><script>
                     (() => {{
                         const urls = [
                             '{primary_host}/recaptcha/enterprise.js?render={website_key}',
@@ -1140,16 +1192,41 @@ class TokenBrowser:
                         loadScript(0);
                     }})();
                     </script></head><body></body></html>"""
-                    await route.fulfill(status=200, content_type="text/html", body=html)
-                elif any(d in route.request.url for d in ["google.com", "gstatic.com", "recaptcha.net"]):
-                    await route.continue_()
-                else:
-                    await route.abort()
+                        await route.fulfill(status=200, content_type="text/html", body=html)
+                    elif any(d in route.request.url for d in ["google.com", "gstatic.com", "recaptcha.net"]):
+                        await route.continue_()
+                    else:
+                        await route.abort()
+
+                goto_wait = "load"
+                goto_timeout_ms = 15000
+            else:
+                page_url = page_url_cfg
+                page_host = (urlparse(page_url).hostname or "").lower()
+                debug_logger.log_info(
+                    f"[BrowserCaptcha] Token-{self.token_id} 打码页(真实页面): {page_url}, enterprise.js: primary={primary_host}, secondary={secondary_host}"
+                )
+
+                async def handle_route(route):
+                    try:
+                        req_host = (urlparse(route.request.url).hostname or "").lower()
+                    except Exception:
+                        req_host = ""
+                    if _captcha_real_page_host_allowed(req_host, page_host):
+                        await route.continue_()
+                    else:
+                        await route.abort()
+
+                goto_wait = "domcontentloaded"
+                goto_timeout_ms = 45000
 
             def handle_request_failed(request):
                 try:
                     failed_url = request.url or ""
-                    if not any(d in failed_url for d in ["google.com", "gstatic.com", "recaptcha.net"]):
+                    if not any(
+                        d in failed_url
+                        for d in ["google.com", "gstatic.com", "recaptcha.net", "labs.google"]
+                    ):
                         return
                     failure = request.failure or ""
                     debug_logger.log_warning(
@@ -1157,11 +1234,11 @@ class TokenBrowser:
                     )
                 except Exception:
                     pass
-            
+
             await page.route("**/*", handle_route)
             page.on("requestfailed", handle_request_failed)
             try:
-                await page.goto(page_url, wait_until="load", timeout=15000)  # 减少到15秒
+                await page.goto(page_url, wait_until=goto_wait, timeout=goto_timeout_ms)
             except Exception as e:
                 debug_logger.log_warning(f"[BrowserCaptcha] Token-{self.token_id} page.goto 失败: {type(e).__name__}: {str(e)[:200]}")
                 debug_logger.log_recaptcha_browser_error(

@@ -391,6 +391,19 @@ class Config:
         self._config["captcha"]["browser_launch_background"] = bool(enabled)
 
     @property
+    def browser_captcha_page_url(self) -> str:
+        """browser 模式 Playwright 打码时打开的首页 URL（默认轻量 auth/providers，可改为 Flow 等真实页面）。"""
+        default = "https://labs.google/fx/api/auth/providers"
+        value = self._config.get("captcha", {}).get("browser_captcha_page_url", default)
+        value = (value or "").strip()
+        return value if value else default
+
+    def set_browser_captcha_page_url(self, page_url: str):
+        if "captcha" not in self._config:
+            self._config["captcha"] = {}
+        self._config["captcha"]["browser_captcha_page_url"] = (page_url or "").strip()
+
+    @property
     def browser_recaptcha_settle_seconds(self) -> float:
         """有头打码在 reload/clr 就绪后的额外等待秒数。"""
         value = self._config.get("captcha", {}).get("browser_recaptcha_settle_seconds", 3.0)

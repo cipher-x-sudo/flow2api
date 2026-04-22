@@ -1545,6 +1545,19 @@ async def update_captcha_config(
     personal_project_pool_size = request.get("personal_project_pool_size")
     personal_max_resident_tabs = request.get("personal_max_resident_tabs")
     personal_idle_tab_ttl_seconds = request.get("personal_idle_tab_ttl_seconds")
+    browser_captcha_page_url = request.get("browser_captcha_page_url")
+
+    # 验证浏览器打码页面 URL
+    if browser_captcha_page_url is not None:
+        raw_page = str(browser_captcha_page_url).strip()
+        if raw_page:
+            from urllib.parse import urlparse
+
+            parsed = urlparse(raw_page)
+            if parsed.scheme not in ("http", "https"):
+                return {"success": False, "message": "打码页面地址必须以 http:// 或 https:// 开头"}
+            if not (parsed.netloc or "").strip():
+                return {"success": False, "message": "打码页面地址无效"}
 
     # 验证浏览器代理URL格式
     if browser_proxy_enabled and browser_proxy_url:
@@ -1587,7 +1600,8 @@ async def update_captcha_config(
         browser_count=max(1, int(browser_count)) if browser_count else 1,
         personal_project_pool_size=personal_project_pool_size,
         personal_max_resident_tabs=personal_max_resident_tabs,
-        personal_idle_tab_ttl_seconds=personal_idle_tab_ttl_seconds
+        personal_idle_tab_ttl_seconds=personal_idle_tab_ttl_seconds,
+        browser_captcha_page_url=browser_captcha_page_url,
     )
 
     # 🔥 Hot reload: sync database config to memory
@@ -1636,7 +1650,11 @@ async def get_captcha_config(token: str = Depends(verify_admin_token)):
         "browser_count": captcha_config.browser_count,
         "personal_project_pool_size": captcha_config.personal_project_pool_size,
         "personal_max_resident_tabs": captcha_config.personal_max_resident_tabs,
-        "personal_idle_tab_ttl_seconds": captcha_config.personal_idle_tab_ttl_seconds
+        "personal_idle_tab_ttl_seconds": captcha_config.personal_idle_tab_ttl_seconds,
+        "browser_captcha_page_url": (
+            (getattr(captcha_config, "browser_captcha_page_url", None) or "").strip()
+            or "https://labs.google/fx/api/auth/providers"
+        ),
     }
 
 

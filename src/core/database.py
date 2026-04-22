@@ -517,6 +517,7 @@ class Database:
                     ("personal_project_pool_size", "INTEGER DEFAULT 4"),
                     ("personal_max_resident_tabs", "INTEGER DEFAULT 5"),
                     ("personal_idle_tab_ttl_seconds", "INTEGER DEFAULT 600"),
+                    ("browser_captcha_page_url", "TEXT DEFAULT 'https://labs.google/fx/api/auth/providers'"),
                 ]
 
                 for col_name, col_type in captcha_columns_to_add:
@@ -734,6 +735,7 @@ class Database:
                     personal_project_pool_size INTEGER DEFAULT 4,
                     personal_max_resident_tabs INTEGER DEFAULT 5,
                     personal_idle_tab_ttl_seconds INTEGER DEFAULT 600,
+                    browser_captcha_page_url TEXT DEFAULT 'https://labs.google/fx/api/auth/providers',
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
@@ -1619,6 +1621,9 @@ class Database:
             config.set_personal_project_pool_size(captcha_config.personal_project_pool_size)
             config.set_personal_max_resident_tabs(captcha_config.personal_max_resident_tabs)
             config.set_personal_idle_tab_ttl_seconds(captcha_config.personal_idle_tab_ttl_seconds)
+            config.set_browser_captcha_page_url(
+                getattr(captcha_config, "browser_captcha_page_url", None) or ""
+            )
 
     # Cache config operations
     async def get_cache_config(self) -> CacheConfig:
@@ -1753,7 +1758,8 @@ class Database:
         browser_count: int = None,
         personal_project_pool_size: int = None,
         personal_max_resident_tabs: int = None,
-        personal_idle_tab_ttl_seconds: int = None
+        personal_idle_tab_ttl_seconds: int = None,
+        browser_captcha_page_url: str = None,
     ):
         """Update captcha configuration"""
         async with self._connect(write=True) as db:
@@ -1781,6 +1787,13 @@ class Database:
                 new_personal_project_pool_size = personal_project_pool_size if personal_project_pool_size is not None else current.get("personal_project_pool_size", 4)
                 new_personal_max_tabs = personal_max_resident_tabs if personal_max_resident_tabs is not None else current.get("personal_max_resident_tabs", 5)
                 new_personal_idle_ttl = personal_idle_tab_ttl_seconds if personal_idle_tab_ttl_seconds is not None else current.get("personal_idle_tab_ttl_seconds", 600)
+                default_page_url = "https://labs.google/fx/api/auth/providers"
+                new_browser_captcha_page_url = (
+                    browser_captcha_page_url
+                    if browser_captcha_page_url is not None
+                    else current.get("browser_captcha_page_url", default_page_url)
+                )
+                new_browser_captcha_page_url = (new_browser_captcha_page_url or default_page_url).strip() or default_page_url
                 new_remote_timeout = max(5, int(new_remote_timeout)) if new_remote_timeout is not None else 60
                 new_personal_project_pool_size = max(1, min(50, int(new_personal_project_pool_size)))
                 new_personal_max_tabs = max(1, min(50, int(new_personal_max_tabs)))  # 限制1-50
@@ -1796,13 +1809,14 @@ class Database:
                         browser_proxy_enabled = ?, browser_proxy_url = ?, browser_count = ?,
                         personal_project_pool_size = ?,
                         personal_max_resident_tabs = ?, personal_idle_tab_ttl_seconds = ?,
+                        browser_captcha_page_url = ?,
                         updated_at = CURRENT_TIMESTAMP
                     WHERE id = 1
                 """, (new_method, new_yes_key, new_yes_url, new_cap_key, new_cap_url,
                       new_ez_key, new_ez_url, new_cs_key, new_cs_url,
                       (new_remote_base_url or "").strip(), (new_remote_api_key or "").strip(), new_remote_timeout,
                       new_proxy_enabled, new_proxy_url, new_browser_count, new_personal_project_pool_size,
-                      new_personal_max_tabs, new_personal_idle_ttl))
+                      new_personal_max_tabs, new_personal_idle_ttl, new_browser_captcha_page_url))
             else:
                 new_method = captcha_method if captcha_method is not None else "yescaptcha"
                 new_yes_key = yescaptcha_api_key if yescaptcha_api_key is not None else ""
@@ -1822,6 +1836,13 @@ class Database:
                 new_personal_project_pool_size = personal_project_pool_size if personal_project_pool_size is not None else 4
                 new_personal_max_tabs = personal_max_resident_tabs if personal_max_resident_tabs is not None else 5
                 new_personal_idle_ttl = personal_idle_tab_ttl_seconds if personal_idle_tab_ttl_seconds is not None else 600
+                default_page_url = "https://labs.google/fx/api/auth/providers"
+                new_browser_captcha_page_url = (
+                    (browser_captcha_page_url or default_page_url).strip()
+                    if browser_captcha_page_url is not None
+                    else default_page_url
+                )
+                new_browser_captcha_page_url = new_browser_captcha_page_url or default_page_url
                 new_remote_timeout = max(5, int(new_remote_timeout))
                 new_personal_project_pool_size = max(1, min(50, int(new_personal_project_pool_size)))
                 new_personal_max_tabs = max(1, min(50, int(new_personal_max_tabs)))
@@ -1834,13 +1855,14 @@ class Database:
                         remote_browser_base_url, remote_browser_api_key, remote_browser_timeout,
                         browser_proxy_enabled, browser_proxy_url, browser_count,
                         personal_project_pool_size,
-                        personal_max_resident_tabs, personal_idle_tab_ttl_seconds)
-                    VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        personal_max_resident_tabs, personal_idle_tab_ttl_seconds,
+                        browser_captcha_page_url)
+                    VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (new_method, new_yes_key, new_yes_url, new_cap_key, new_cap_url,
                       new_ez_key, new_ez_url, new_cs_key, new_cs_url,
                       (new_remote_base_url or "").strip(), (new_remote_api_key or "").strip(), new_remote_timeout,
                       new_proxy_enabled, new_proxy_url, new_browser_count, new_personal_project_pool_size,
-                      new_personal_max_tabs, new_personal_idle_ttl))
+                      new_personal_max_tabs, new_personal_idle_ttl, new_browser_captcha_page_url))
 
             await db.commit()
 
