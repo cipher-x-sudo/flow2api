@@ -2330,17 +2330,10 @@ class FlowClient:
         captcha_method = config.captcha_method
         debug_logger.log_info(f"[reCAPTCHA] 开始获取 token: method={captcha_method}, project_id={project_id}, action={action}")
         self._recaptcha_begin_request(action)
-        if config.debug_recaptcha_phase_timings:
-            debug_logger.log_recaptcha(
-                f"start method={captcha_method} project_id={project_id} action={action} token_id={token_id}",
-                phase="flow_get_token",
-            )
 
         # 内置浏览器打码 (nodriver)
         if captcha_method == "personal":
             debug_logger.log_info(f"[reCAPTCHA] 使用 personal 模式")
-            if config.debug_recaptcha_phase_timings:
-                debug_logger.log_recaptcha("branch=personal", phase="flow_get_token")
             try:
                 from .browser_captcha_personal import BrowserCaptchaService
                 debug_logger.log_info(f"[reCAPTCHA] 导入 BrowserCaptchaService 成功")
@@ -2349,8 +2342,6 @@ class FlowClient:
                 token = await service.get_token(project_id, action)
                 meta = debug_logger.format_recaptcha_token_meta(token)
                 debug_logger.log_info(f"[reCAPTCHA] get_token 返回: {meta}")
-                if config.debug_recaptcha_phase_timings:
-                    debug_logger.log_recaptcha(f"personal done token_meta={meta}", phase="flow_get_token")
                 fingerprint = service.get_last_fingerprint() if token else None
                 self._set_request_fingerprint(fingerprint if token else None)
                 if token:
@@ -2382,21 +2373,12 @@ class FlowClient:
                 return None, None
         # 有头浏览器打码 (playwright)
         elif captcha_method == "browser":
-            if config.debug_recaptcha_phase_timings:
-                debug_logger.log_recaptcha("branch=browser (headed pool)", phase="flow_get_token")
             try:
                 from .browser_captcha import BrowserCaptchaService
                 service = await BrowserCaptchaService.get_instance(self.db)
                 token, browser_id = await service.get_token(project_id, action, token_id=token_id)
                 fingerprint = await service.get_fingerprint(browser_id) if token else None
                 self._set_request_fingerprint(fingerprint if token else None)
-                if config.debug_recaptcha_phase_timings:
-                    meta = debug_logger.format_recaptcha_token_meta(token)
-                    debug_logger.log_recaptcha(
-                        f"browser pool done ok={bool(token)} browser_ref={browser_id} token_meta={meta}",
-                        phase="flow_get_token",
-                        level="warning" if not token else "info",
-                    )
                 if token:
                     debug_logger.log_recaptcha_token_success(token)
                 else:
@@ -2425,12 +2407,8 @@ class FlowClient:
                 self._set_request_fingerprint(None)
                 return None, None
         elif captcha_method == "remote_browser":
-            if config.debug_recaptcha_phase_timings:
-                debug_logger.log_recaptcha("branch=remote_browser", phase="flow_get_token")
             try:
                 solve_timeout = self._resolve_remote_browser_solve_timeout(action)
-                if config.debug_recaptcha_phase_timings:
-                    debug_logger.log_recaptcha(f"remote solve POST timeout={solve_timeout}s", phase="flow_get_token")
                 payload = await self._call_remote_browser_service(
                     method="POST",
                     path="/api/v1/solve",
@@ -2447,12 +2425,6 @@ class FlowClient:
                 self._set_request_fingerprint(fingerprint if token else None)
                 if not token or not session_id:
                     raise RuntimeError(f"remote_browser 返回缺少 token/session_id: {payload}")
-                if config.debug_recaptcha_phase_timings:
-                    meta = debug_logger.format_recaptcha_token_meta(token)
-                    debug_logger.log_recaptcha(
-                        f"remote_browser ok session_id={session_id} token_meta={meta}",
-                        phase="flow_get_token",
-                    )
                 debug_logger.log_recaptcha_token_success(token)
                 return token, str(session_id)
             except Exception as e:
@@ -2463,16 +2435,7 @@ class FlowClient:
         # API打码服务
         elif captcha_method in ["yescaptcha", "capmonster", "ezcaptcha", "capsolver"]:
             self._set_request_fingerprint(None)
-            if config.debug_recaptcha_phase_timings:
-                debug_logger.log_recaptcha(f"branch=api method={captcha_method}", phase="flow_get_token")
             token = await self._get_api_captcha_token(captcha_method, project_id, action)
-            if config.debug_recaptcha_phase_timings:
-                meta = debug_logger.format_recaptcha_token_meta(token)
-                debug_logger.log_recaptcha(
-                    f"api done ok={bool(token)} token_meta={meta}",
-                    phase="flow_get_token",
-                    level="warning" if not token else "info",
-                )
             if token:
                 debug_logger.log_recaptcha_token_success(token)
             return token, None
@@ -2509,15 +2472,11 @@ class FlowClient:
             task_type = "ReCaptchaV3EnterpriseTaskProxyLess"
         else:
             debug_logger.log_error(f"[reCAPTCHA] Unknown API method: {method}")
-            if config.debug_recaptcha_phase_timings:
-                debug_logger.log_recaptcha(f"unknown API method={method}", phase="api_captcha", level="error")
             debug_logger.log_recaptcha_browser_error(f"unknown API method: {method}", {"success": False})
             return None
 
         if not client_key:
             debug_logger.log_info(f"[reCAPTCHA] {method} API key not configured, skipping")
-            if config.debug_recaptcha_phase_timings:
-                debug_logger.log_recaptcha(f"{method} API key not configured", phase="api_captcha", level="warning")
             debug_logger.log_recaptcha_browser_error(f"{method} API key not configured", {"success": False})
             return None
 
@@ -2545,14 +2504,10 @@ class FlowClient:
                 task_id = result_json.get('taskId')
 
                 debug_logger.log_info(f"[reCAPTCHA {method}] created task_id: {task_id}")
-                if config.debug_recaptcha_phase_timings:
-                    debug_logger.log_recaptcha(f"{method} createTask task_id={task_id}", phase="api_captcha")
 
                 if not task_id:
                     error_desc = result_json.get('errorDescription', 'Unknown error')
                     debug_logger.log_error(f"[reCAPTCHA {method}] Failed to create task: {error_desc}")
-                    if config.debug_recaptcha_phase_timings:
-                        debug_logger.log_recaptcha(f"{method} createTask failed: {error_desc[:200]}", phase="api_captcha", level="error")
                     debug_logger.log_recaptcha_browser_error(
                         f"{method} createTask failed: {error_desc[:500]}",
                         result_json,
@@ -2569,13 +2524,6 @@ class FlowClient:
                     result_json = result.json()
 
                     debug_logger.log_info(f"[reCAPTCHA {method}] polling #{i+1}: {result_json}")
-                    poll_status = result_json.get("status")
-                    err_id = result_json.get("errorId")
-                    if config.debug_recaptcha_phase_timings:
-                        debug_logger.log_recaptcha(
-                            f"{method} poll #{i + 1} status={poll_status} errorId={err_id}",
-                            phase="api_captcha",
-                        )
 
                     status = result_json.get('status')
                     if status == 'ready':
@@ -2583,18 +2531,11 @@ class FlowClient:
                         response = solution.get('gRecaptchaResponse')
                         if response:
                             debug_logger.log_info(f"[reCAPTCHA {method}] Token获取成功")
-                            if config.debug_recaptcha_phase_timings:
-                                debug_logger.log_recaptcha(
-                                    f"{method} token ready meta={debug_logger.format_recaptcha_token_meta(response)}",
-                                    phase="api_captcha",
-                                )
                             return response
 
                     await asyncio.sleep(3)
 
                 debug_logger.log_error(f"[reCAPTCHA {method}] Timeout waiting for token")
-                if config.debug_recaptcha_phase_timings:
-                    debug_logger.log_recaptcha(f"{method} poll timeout after 40 rounds", phase="api_captcha", level="error")
                 debug_logger.log_recaptcha_browser_error(
                     f"{method} getTaskResult timeout after 40 polls",
                     {"success": False, "taskId": task_id},
@@ -2603,7 +2544,5 @@ class FlowClient:
 
         except Exception as e:
             debug_logger.log_error(f"[reCAPTCHA {method}] error: {str(e)}")
-            if config.debug_recaptcha_phase_timings:
-                debug_logger.log_recaptcha(f"{method} exception: {type(e).__name__}: {str(e)[:300]}", phase="api_captcha", level="error")
             debug_logger.log_recaptcha_execution_error(f"{method}: {str(e)}")
             return None

@@ -2461,12 +2461,6 @@ class BrowserCaptchaService:
             reCAPTCHA token字符串，如果获取失败返回None
         """
         debug_logger.log_info(f"[BrowserCaptcha] get_token 开始: project_id={project_id}, action={action}, 当前标签页数={len(self._resident_tabs)}/{self._max_resident_tabs}")
-        if config.debug_recaptcha_phase_timings:
-            debug_logger.log_recaptcha(
-                f"personal get_token enter project_id={project_id} action={action} "
-                f"tabs={len(self._resident_tabs)}/{self._max_resident_tabs}",
-                phase="personal_pool",
-            )
 
         # 确保浏览器已初始化
         await self.initialize()
@@ -2524,11 +2518,6 @@ class BrowserCaptchaService:
                     success_label="resident_solve",
                 )
                 if token:
-                    if config.debug_recaptcha_phase_timings:
-                        debug_logger.log_recaptcha(
-                            f"personal resident_ok slot={slot_id} meta={debug_logger.format_recaptcha_token_meta(token)}",
-                            phase="personal_pool",
-                        )
                     return token
                 debug_logger.log_warning(
                     f"[BrowserCaptcha] 共享标签页生成失败 (slot={slot_id}, project={project_id})，尝试重建..."
@@ -2552,12 +2541,6 @@ class BrowserCaptchaService:
                                     success_label="resident_solve_after_runtime_recover",
                                 )
                                 if token:
-                                    if config.debug_recaptcha_phase_timings:
-                                        debug_logger.log_recaptcha(
-                                            f"personal resident_ok_after_recover slot={slot_id} "
-                                            f"meta={debug_logger.format_recaptcha_token_meta(token)}",
-                                            phase="personal_pool",
-                                        )
                                     return token
                             except Exception as retry_error:
                                 debug_logger.log_warning(
@@ -2592,11 +2575,6 @@ class BrowserCaptchaService:
                         )
                         if token:
                             debug_logger.log_info(f"[BrowserCaptcha] ✅ 重建后 Token生成成功 (slot={slot_id})")
-                            if config.debug_recaptcha_phase_timings:
-                                debug_logger.log_recaptcha(
-                                    f"personal rebuild_ok slot={slot_id} meta={debug_logger.format_recaptcha_token_meta(token)}",
-                                    phase="personal_pool",
-                                )
                             return token
                     except Exception as rebuild_error:
                         debug_logger.log_warning(
@@ -2615,12 +2593,6 @@ class BrowserCaptchaService:
                                             success_label="resident_resolve_after_browser_restart",
                                         )
                                         if token:
-                                            if config.debug_recaptcha_phase_timings:
-                                                debug_logger.log_recaptcha(
-                                                    f"personal restart_ok slot={slot_id} "
-                                                    f"meta={debug_logger.format_recaptcha_token_meta(token)}",
-                                                    phase="personal_pool",
-                                                )
                                             return token
                                     except Exception as restart_error:
                                         debug_logger.log_warning(
@@ -2639,12 +2611,6 @@ class BrowserCaptchaService:
                                     success_label="resident_resolve_after_empty_recover",
                                 )
                                 if token:
-                                    if config.debug_recaptcha_phase_timings:
-                                        debug_logger.log_recaptcha(
-                                            f"personal empty_recover_ok slot={slot_id} "
-                                            f"meta={debug_logger.format_recaptcha_token_meta(token)}",
-                                            phase="personal_pool",
-                                        )
                                     return token
                             except Exception as empty_recover_error:
                                 debug_logger.log_warning(
@@ -2657,13 +2623,6 @@ class BrowserCaptchaService:
         if legacy_token:
             if slot_id:
                 self._resident_error_streaks.pop(slot_id, None)
-        if config.debug_recaptcha_phase_timings:
-            debug_logger.log_recaptcha(
-                f"personal get_token exit via_legacy={bool(legacy_token)} "
-                f"meta={debug_logger.format_recaptcha_token_meta(legacy_token)}",
-                phase="personal_pool",
-                level="warning" if not legacy_token else "info",
-            )
         return legacy_token
 
     async def _create_resident_tab(self, slot_id: str, project_id: Optional[str] = None) -> Optional[ResidentTabInfo]:

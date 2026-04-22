@@ -37,10 +37,6 @@ mask_token = true
 recaptcha_trace = false
 # Mirror reCAPTCHA trace lines to stdout (useful next to headed Playwright).
 recaptcha_console = false
-# Wrap reCAPTCHA file log lines with separator banners.
-recaptcha_banner = true
-# Verbose per-phase timing logs (goto_ms, pool enter, etc.). Default off; use narrative script lines instead.
-recaptcha_phase_timings = false
 
 [proxy]
 proxy_enabled = false

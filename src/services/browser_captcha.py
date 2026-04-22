@@ -1108,17 +1108,10 @@ class TokenBrowser:
     async def _execute_captcha(self, context, project_id: str, website_key: str, action: str) -> Optional[str]:
         """在给定 context 中执行打码逻辑"""
         page = None
-        t_flow = time.monotonic()
         try:
             page = await context.new_page()
             await page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined});")
             debug_logger.log_recaptcha_state_reset()
-            if config.debug_recaptcha_phase_timings:
-                debug_logger.log_recaptcha(
-                    f"Token-{self.token_id} page=new project_id={project_id} action={action} "
-                    f"elapsed_ms={(time.monotonic() - t_flow) * 1000:.0f}",
-                    phase="headed_execute",
-                )
 
             # 使用更简单的 API 地址，避免加载复杂页面
             page_url = "https://labs.google/fx/api/auth/providers"
@@ -1169,19 +1162,8 @@ class TokenBrowser:
             page.on("requestfailed", handle_request_failed)
             try:
                 await page.goto(page_url, wait_until="load", timeout=15000)  # 减少到15秒
-                if config.debug_recaptcha_phase_timings:
-                    debug_logger.log_recaptcha(
-                        f"Token-{self.token_id} goto_ok elapsed_ms={(time.monotonic() - t_flow) * 1000:.0f}",
-                        phase="headed_execute",
-                    )
             except Exception as e:
                 debug_logger.log_warning(f"[BrowserCaptcha] Token-{self.token_id} page.goto 失败: {type(e).__name__}: {str(e)[:200]}")
-                if config.debug_recaptcha_phase_timings:
-                    debug_logger.log_recaptcha(
-                        f"Token-{self.token_id} goto_fail {type(e).__name__}: {str(e)[:200]}",
-                        phase="headed_execute",
-                        level="warning",
-                    )
                 debug_logger.log_recaptcha_browser_error(
                     f"page.goto failed: {type(e).__name__}: {str(e)[:300]}",
                     {"success": False, "stage": "goto"},
@@ -1190,19 +1172,8 @@ class TokenBrowser:
 
             try:
                 await page.wait_for_function("typeof grecaptcha !== 'undefined'", timeout=10000)  # 减少到10秒
-                if config.debug_recaptcha_phase_timings:
-                    debug_logger.log_recaptcha(
-                        f"Token-{self.token_id} grecaptcha_ready elapsed_ms={(time.monotonic() - t_flow) * 1000:.0f}",
-                        phase="headed_execute",
-                    )
             except Exception as e:
                 debug_logger.log_warning(f"[BrowserCaptcha] Token-{self.token_id} grecaptcha 未就绪: {type(e).__name__}: {str(e)[:200]}")
-                if config.debug_recaptcha_phase_timings:
-                    debug_logger.log_recaptcha(
-                        f"Token-{self.token_id} grecaptcha_timeout {type(e).__name__}: {str(e)[:200]}",
-                        phase="headed_execute",
-                        level="warning",
-                    )
                 debug_logger.log_recaptcha_browser_error(
                     f"grecaptcha not ready: {type(e).__name__}: {str(e)[:300]}",
                     {"success": False, "stage": "grecaptcha_ready"},
@@ -1211,17 +1182,7 @@ class TokenBrowser:
 
             # 记录本次打码页面的真实 UA/客户端提示头
             await self._capture_page_fingerprint(page)
-            if config.debug_recaptcha_phase_timings:
-                debug_logger.log_recaptcha(
-                    f"Token-{self.token_id} fingerprint_captured elapsed_ms={(time.monotonic() - t_flow) * 1000:.0f}",
-                    phase="headed_execute",
-                )
 
-            if config.debug_recaptcha_phase_timings:
-                debug_logger.log_recaptcha(
-                    f"Token-{self.token_id} enterprise_execute_start elapsed_ms={(time.monotonic() - t_flow) * 1000:.0f}",
-                    phase="headed_execute",
-                )
             token = await asyncio.wait_for(
                 page.evaluate(f"""
                     (actionName) => {{
@@ -1244,22 +1205,10 @@ class TokenBrowser:
                 )
                 await asyncio.sleep(post_wait_seconds)
 
-            if config.debug_recaptcha_phase_timings:
-                debug_logger.log_recaptcha(
-                    f"Token-{self.token_id} execute_done total_ms={(time.monotonic() - t_flow) * 1000:.0f} "
-                    f"token_meta={debug_logger.format_recaptcha_token_meta(token)}",
-                    phase="headed_execute",
-                )
             return token
         except Exception as e:
             msg = f"{type(e).__name__}: {str(e)}"
             debug_logger.log_warning(f"[BrowserCaptcha] Token-{self.token_id} 打码失败: {msg[:200]}")
-            if config.debug_recaptcha_phase_timings:
-                debug_logger.log_recaptcha(
-                    f"Token-{self.token_id} execute_exception {msg[:200]}",
-                    phase="headed_execute",
-                    level="warning",
-                )
             debug_logger.log_recaptcha_execution_error(msg[:500])
             return None
         finally:
@@ -1494,11 +1443,6 @@ class TokenBrowser:
                 for attempt in range(max_retries):
                     try:
                         start_ts = time.time()
-                        if config.debug_recaptcha_phase_timings:
-                            debug_logger.log_recaptcha(
-                                f"TokenBrowser token_id={self.token_id} attempt={attempt + 1}/{max_retries}",
-                                phase="headed_solve",
-                            )
                         _, _, context = await self._get_or_create_shared_browser(token_proxy_url=token_proxy_url)
 
                         token = await self._execute_captcha(context, project_id, website_key, action)
@@ -1508,12 +1452,6 @@ class TokenBrowser:
                             debug_logger.log_info(
                                 f"[BrowserCaptcha] Token-{self.token_id} token acquired ({(time.time()-start_ts)*1000:.0f}ms, launches={self._shared_launch_count}, reuse={self._shared_reuse_count})"
                             )
-                            if config.debug_recaptcha_phase_timings:
-                                debug_logger.log_recaptcha(
-                                    f"Token-{self.token_id} ok elapsed_ms={(time.time() - start_ts) * 1000:.0f} "
-                                    f"token_meta={debug_logger.format_recaptcha_token_meta(token)}",
-                                    phase="headed_solve",
-                                )
                             return token, None
 
                         self._error_count += 1
@@ -1974,11 +1912,6 @@ class BrowserCaptchaService:
         
         self._stats["req_total"] += 1
         token_proxy_url = await self._resolve_token_proxy_url(token_id)
-        if config.debug_recaptcha_phase_timings:
-            debug_logger.log_recaptcha(
-                f"pool enter project_id={project_id} action={action} token_id={token_id} proxy={'yes' if token_proxy_url else 'no'}",
-                phase="headed_pool",
-            )
 
         token: Optional[str] = None
         request_ref: Optional[str] = None
@@ -2003,13 +1936,6 @@ class BrowserCaptchaService:
             else:
                 self._stats["gen_fail"] += 1
 
-            if config.debug_recaptcha_phase_timings:
-                debug_logger.log_recaptcha(
-                    f"pool exit ok={bool(token)} browser_ref={self._compose_browser_ref(browser_id, request_ref)} "
-                    f"token_meta={debug_logger.format_recaptcha_token_meta(token)}",
-                    phase="headed_pool",
-                    level="warning" if not token else "info",
-                )
             self._log_stats()
             return token, self._compose_browser_ref(browser_id, request_ref)
         
@@ -2030,13 +1956,6 @@ class BrowserCaptchaService:
         else:
             self._stats["gen_fail"] += 1
 
-        if config.debug_recaptcha_phase_timings:
-            debug_logger.log_recaptcha(
-                f"pool exit ok={bool(token)} browser_ref={self._compose_browser_ref(browser_id, request_ref)} "
-                f"token_meta={debug_logger.format_recaptcha_token_meta(token)}",
-                phase="headed_pool",
-                level="warning" if not token else "info",
-            )
         self._log_stats()
         return token, self._compose_browser_ref(browser_id, request_ref)
 
