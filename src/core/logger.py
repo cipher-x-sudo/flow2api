@@ -309,6 +309,10 @@ class DebugLogger:
             f"[DEBUG] reCAPTCHA action switch: {old_action} → {new_action}, resetting"
         )
 
+    def log_recaptcha_proxy_check(self, line: str) -> None:
+        """Headed-browser proxy resolution; intended to run before action/generating narrative lines."""
+        self._recaptcha_narrative_line(line)
+
     def log_recaptcha_request_action(self, action: str) -> None:
         self._recaptcha_narrative_line(f"[DEBUG] reCAPTCHA request action: {action}")
 

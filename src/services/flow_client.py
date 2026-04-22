@@ -8,7 +8,7 @@ import random
 import base64
 import ssl
 from typing import Dict, Any, Optional, List, Union, Callable, Awaitable
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 import urllib.error
 import urllib.request
 from curl_cffi.requests import AsyncSession
@@ -19,6 +19,25 @@ try:
     import httpx
 except ImportError:
     httpx = None
+
+
+def _proxy_endpoint_for_log(url: Optional[str]) -> str:
+    """Host:port (scheme) for logs; strips credentials."""
+    if not url or not isinstance(url, str):
+        return "direct"
+    u = url.strip()
+    if not u:
+        return "direct"
+    if "://" not in u:
+        u = f"http://{u}"
+    try:
+        p = urlparse(u)
+        host = p.hostname or "?"
+        port = f":{p.port}" if p.port else ""
+        scheme = (p.scheme or "http").lower()
+        return f"{scheme}://{host}{port}"
+    except Exception:
+        return "unparseable"
 
 
 class FlowClient:
@@ -2295,6 +2314,78 @@ class FlowClient:
         target_timeout = 45 if action_name == "VIDEO_GENERATION" else 35
         return max(12, min(base_timeout, target_timeout))
 
+    async def _log_recaptcha_headed_proxy_context(self, captcha_method: str, token_id: Optional[int]) -> None:
+        """Log which proxy headed captcha will use, before narrative action lines."""
+        if not debug_logger.should_log_recaptcha():
+            return
+        if captcha_method not in ("browser", "personal"):
+            return
+        if not self.db:
+            debug_logger.log_recaptcha_proxy_check(
+                "[DEBUG] reCAPTCHA headed-browser proxy check: database unavailable (endpoint unknown)"
+            )
+            return
+        try:
+            cc = await self.db.get_captcha_config()
+        except Exception as e:
+            debug_logger.log_recaptcha_proxy_check(
+                f"[DEBUG] reCAPTCHA headed-browser proxy check: captcha config read failed: {type(e).__name__}: {e}"
+            )
+            return
+
+        bp_on = bool(getattr(cc, "browser_proxy_enabled", False))
+        bp_url = (getattr(cc, "browser_proxy_url", None) or "").strip()
+
+        if captcha_method == "browser":
+            token_url = ""
+            if token_id:
+                try:
+                    tok = await self.db.get_token(token_id)
+                    token_url = (tok.captcha_proxy_url or "").strip() if tok else ""
+                except Exception as e:
+                    debug_logger.log_recaptcha_proxy_check(
+                        f"[DEBUG] reCAPTCHA headed-browser proxy check: token lookup failed: {type(e).__name__}: {e}"
+                    )
+            if token_url:
+                src = "token"
+                eff = token_url
+            elif bp_on and bp_url:
+                src = "global_captcha_browser"
+                eff = bp_url
+            else:
+                src = "none"
+                eff = None
+            ep = _proxy_endpoint_for_log(eff) if eff else "direct"
+            debug_logger.log_recaptcha_proxy_check(
+                f"[DEBUG] reCAPTCHA headed-browser proxy check: chosen_source={src} endpoint={ep} "
+                f"(captcha_browser_proxy_enabled={bp_on})"
+            )
+            return
+
+        rq_on = False
+        rq_url = ""
+        try:
+            pc = await self.db.get_proxy_config()
+            if pc:
+                rq_on = bool(pc.enabled)
+                rq_url = (pc.proxy_url or "").strip() if pc.proxy_url else ""
+        except Exception:
+            pass
+        if bp_on and bp_url:
+            src = "global_captcha_browser"
+            eff = bp_url
+        elif rq_on and rq_url:
+            src = "request_proxy"
+            eff = rq_url
+        else:
+            src = "none"
+            eff = None
+        ep = _proxy_endpoint_for_log(eff) if eff else "direct"
+        debug_logger.log_recaptcha_proxy_check(
+            f"[DEBUG] reCAPTCHA personal-browser proxy check: chosen_source={src} endpoint={ep} "
+            f"(captcha_browser_proxy_enabled={bp_on}, request_proxy_enabled={rq_on})"
+        )
+
     def _recaptcha_begin_request(self, action: str) -> None:
         """Narrative-style lines when starting a reCAPTCHA solve (image/video job)."""
         if not debug_logger.should_log_recaptcha():
@@ -2329,6 +2420,7 @@ class FlowClient:
         """
         captcha_method = config.captcha_method
         debug_logger.log_info(f"[reCAPTCHA] 开始获取 token: method={captcha_method}, project_id={project_id}, action={action}")
+        await self._log_recaptcha_headed_proxy_context(captcha_method, token_id)
         self._recaptcha_begin_request(action)
 
         # 内置浏览器打码 (nodriver)
