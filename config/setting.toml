@@ -36,6 +36,7 @@ mask_token = true
 recaptcha_trace = true
 recaptcha_console = true
 recaptcha_banner = true
+recaptcha_phase_timings = true
 
 [proxy]
 proxy_enabled = false

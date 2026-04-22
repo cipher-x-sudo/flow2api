@@ -245,6 +245,11 @@ class Config:
     def debug_recaptcha_banner(self) -> bool:
         return bool(self._config.get("debug", {}).get("recaptcha_banner", True))
 
+    @property
+    def debug_recaptcha_phase_timings(self) -> bool:
+        """When true, log per-phase timing lines (headed_execute, pool, etc.) in addition to narrative."""
+        return bool(self._config.get("debug", {}).get("recaptcha_phase_timings", False))
+
     # Mutable properties for runtime updates
     @property
     def api_key(self) -> str:

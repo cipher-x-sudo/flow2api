@@ -1,7 +1,7 @@
 """Debug logger module for detailed API request/response logging"""
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Any, Optional
 from .config import config
@@ -280,6 +280,67 @@ class DebugLogger:
 
     def _should_log_recaptcha(self) -> bool:
         return bool(config.debug_enabled or config.debug_recaptcha_trace)
+
+    def should_log_recaptcha(self) -> bool:
+        """True when reCAPTCHA narrative or trace logging is active."""
+        return self._should_log_recaptcha()
+
+    def _recaptcha_narrative_line(self, line: str, level: str = "info") -> None:
+        """Single-line reCAPTCHA log (no banner). Writes to logs.txt and optional console."""
+        if not self._should_log_recaptcha():
+            return
+        try:
+            if level == "warning":
+                self.logger.warning(line)
+            elif level == "error":
+                self.logger.error(line)
+            else:
+                self.logger.info(line)
+            if config.debug_recaptcha_console:
+                print(line, flush=True)
+        except Exception as e:
+            self.logger.error(f"Error logging reCAPTCHA narrative: {e}")
+
+    def log_recaptcha_state_reset(self) -> None:
+        self._recaptcha_narrative_line("[DEBUG] reCAPTCHA state reset (lastAction cleared)")
+
+    def log_recaptcha_action_switch(self, old_action: str, new_action: str) -> None:
+        self._recaptcha_narrative_line(
+            f"[DEBUG] reCAPTCHA action switch: {old_action} → {new_action}, resetting"
+        )
+
+    def log_recaptcha_request_action(self, action: str) -> None:
+        self._recaptcha_narrative_line(f"[DEBUG] reCAPTCHA request action: {action}")
+
+    def log_recaptcha_generating(self, action: str) -> None:
+        """Plain line (no [DEBUG] prefix), matching browser-style UX logs."""
+        self._recaptcha_narrative_line(f"Generating reCAPTCHA token with action: {action}")
+
+    def log_recaptcha_token_success(self, token: Optional[str]) -> None:
+        if not token:
+            return
+        head = token[:40] + ("..." if len(token) > 40 else "")
+        self._recaptcha_narrative_line(f"Token obtained: {head}")
+        self._recaptcha_narrative_line(f"[DEBUG] reCAPTCHA token length: {len(token)}")
+        iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+        self._recaptcha_narrative_line(f"[DEBUG] reCAPTCHA token obtained at: {iso}")
+
+    def log_recaptcha_browser_error(self, message: str, raw_result: Optional[Any] = None) -> None:
+        self._recaptcha_narrative_line(f"reCAPTCHA error: {message}", level="error")
+        if raw_result is not None:
+            if isinstance(raw_result, str):
+                raw = raw_result
+            else:
+                try:
+                    raw = json.dumps(raw_result, ensure_ascii=False)
+                except Exception:
+                    raw = str(raw_result)
+            if len(raw) > 2000:
+                raw = raw[:2000] + "... (truncated)"
+            self._recaptcha_narrative_line(f"[DEBUG] reCAPTCHA raw result: {raw}")
+
+    def log_recaptcha_execution_error(self, message: str) -> None:
+        self._recaptcha_narrative_line(f"reCAPTCHA execution error: {message}", level="error")
 
     @staticmethod
     def format_recaptcha_token_meta(token: Optional[str]) -> str:
