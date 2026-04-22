@@ -33,6 +33,12 @@ enabled = false
 log_requests = true
 log_responses = true
 mask_token = true
+# reCAPTCHA-only trace: logs to logs.txt even when enabled=false (no full API request dumps).
+recaptcha_trace = false
+# Mirror reCAPTCHA trace lines to stdout (useful next to headed Playwright).
+recaptcha_console = false
+# Wrap reCAPTCHA file log lines with separator banners.
+recaptcha_banner = true
 
 [proxy]
 proxy_enabled = false

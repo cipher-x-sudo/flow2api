@@ -96,7 +96,7 @@ async def lifespan(app: FastAPI):
         from .services.browser_captcha import BrowserCaptchaService
         browser_service = await BrowserCaptchaService.get_instance(db)
         await browser_service.warmup_browser_slots()
-        print("? Browser captcha service initialized (headed mode)")
+        print("Browser captcha service initialized (headed / Playwright pool)")
 
     # Initialize concurrency manager
     await concurrency_manager.initialize(tokens)

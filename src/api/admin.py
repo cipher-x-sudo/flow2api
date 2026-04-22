@@ -15,6 +15,7 @@ from curl_cffi.requests import AsyncSession
 from ..core.auth import AuthManager
 from ..core.database import Database
 from ..core.config import config
+from ..core.logger import debug_logger
 from ..services.token_manager import TokenManager
 from ..services.proxy_manager import ProxyManager
 from ..services.concurrency_manager import ConcurrencyManager
@@ -356,6 +357,11 @@ async def _solve_recaptcha_with_api_service(
     if not client_key:
         raise RuntimeError(f"{method} API Key 未配置")
 
+    debug_logger.log_recaptcha(
+        f"admin createTask method={method} action={action} enterprise={enterprise}",
+        phase="admin_api_captcha",
+    )
+
     task: Dict[str, Any] = {
         "websiteURL": website_url,
         "websiteKey": website_key,
@@ -379,6 +385,7 @@ async def _solve_recaptcha_with_api_service(
         )
         create_json = create_resp.json()
         task_id = create_json.get("taskId")
+        debug_logger.log_recaptcha(f"admin createTask result task_id={task_id}", phase="admin_api_captcha")
 
         if not task_id:
             error_desc = create_json.get("errorDescription") or create_json.get("errorMessage") or str(create_json)
@@ -391,10 +398,18 @@ async def _solve_recaptcha_with_api_service(
                 timeout=30
             )
             poll_json = poll_resp.json()
+            debug_logger.log_recaptcha(
+                f"admin poll status={poll_json.get('status')} errorId={poll_json.get('errorId')}",
+                phase="admin_api_captcha",
+            )
             if poll_json.get("status") == "ready":
                 solution = poll_json.get("solution", {}) or {}
                 token = solution.get("gRecaptchaResponse") or solution.get("token")
                 if token:
+                    debug_logger.log_recaptcha(
+                        f"admin token ok meta={debug_logger.format_recaptcha_token_meta(token)}",
+                        phase="admin_api_captcha",
+                    )
                     return token
                 raise RuntimeError(f"{method} 返回结果缺少 token: {poll_json}")
 
@@ -404,6 +419,7 @@ async def _solve_recaptcha_with_api_service(
 
             await asyncio.sleep(3)
 
+    debug_logger.log_recaptcha(f"admin poll exhausted method={method}", phase="admin_api_captcha", level="error")
     raise RuntimeError(f"{method} 获取 token 超时")
 
 

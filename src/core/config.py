@@ -233,6 +233,18 @@ class Config:
     def debug_mask_token(self) -> bool:
         return self._config.get("debug", {}).get("mask_token", True)
 
+    @property
+    def debug_recaptcha_trace(self) -> bool:
+        return bool(self._config.get("debug", {}).get("recaptcha_trace", False))
+
+    @property
+    def debug_recaptcha_console(self) -> bool:
+        return bool(self._config.get("debug", {}).get("recaptcha_console", False))
+
+    @property
+    def debug_recaptcha_banner(self) -> bool:
+        return bool(self._config.get("debug", {}).get("recaptcha_banner", True))
+
     # Mutable properties for runtime updates
     @property
     def api_key(self) -> str:

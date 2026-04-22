@@ -278,5 +278,70 @@ class DebugLogger:
         except Exception as e:
             self.logger.error(f"Error logging warning: {e}")
 
+    def _should_log_recaptcha(self) -> bool:
+        return bool(config.debug_enabled or config.debug_recaptcha_trace)
+
+    @staticmethod
+    def format_recaptcha_token_meta(token: Optional[str]) -> str:
+        """Safe one-line description of a reCAPTCHA token (never log full JWT)."""
+        if not token:
+            return "none"
+        n = len(token)
+        if config.debug_mask_token and n > 12:
+            return f"len={n} preview={token[:6]}...{token[-6:]}"
+        return f"len={n}"
+
+    def log_recaptcha(
+        self,
+        message: str,
+        *,
+        phase: Optional[str] = None,
+        level: str = "info",
+    ) -> None:
+        """Log reCAPTCHA solve trace to logs.txt when debug.enabled or debug.recaptcha_trace.
+
+        Optional console mirror when debug.recaptcha_console. Does not log raw tokens; callers
+        should pass human-readable steps only, or use format_recaptcha_token_meta().
+        """
+        if not self._should_log_recaptcha():
+            return
+        ts = self._format_timestamp()
+        phase_part = f" / {phase}" if phase else ""
+        title = f"reCAPTCHA{phase_part}"
+        if level == "warning":
+            tag = "WARNING"
+        elif level == "error":
+            tag = "ERROR"
+        else:
+            tag = "INFO"
+        console_line = f"[reCAPTCHA][{tag}]{('[' + phase + ']') if phase else ''} {message}"
+
+        try:
+            if config.debug_recaptcha_banner:
+                self._write_separator()
+                self.logger.info(f"[{title}] [{tag}] {ts}")
+                self._write_separator("-")
+                if level == "warning":
+                    self.logger.warning(message)
+                elif level == "error":
+                    self.logger.error(message)
+                else:
+                    self.logger.info(message)
+                self._write_separator()
+                self.logger.info("")
+            else:
+                prefix = f"[{title}] [{tag}] {ts}"
+                if level == "warning":
+                    self.logger.warning(f"{prefix} {message}")
+                elif level == "error":
+                    self.logger.error(f"{prefix} {message}")
+                else:
+                    self.logger.info(f"{prefix} {message}")
+
+            if config.debug_recaptcha_console:
+                print(console_line, flush=True)
+        except Exception as e:
+            self.logger.error(f"Error logging reCAPTCHA trace: {e}")
+
 # Global debug logger instance
 debug_logger = DebugLogger()

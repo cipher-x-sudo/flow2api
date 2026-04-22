@@ -33,6 +33,9 @@ enabled = false
 log_requests = true
 log_responses = true
 mask_token = true
+recaptcha_trace = false
+recaptcha_console = false
+recaptcha_banner = true
 
 [proxy]
 proxy_enabled = false
