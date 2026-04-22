@@ -1874,6 +1874,21 @@ class GenerationHandler:
 
     # ========== 响应格式化 ==========
 
+    @staticmethod
+    def _format_stream_reasoning_for_ui(content: str) -> str:
+        """Make progress / thought text render as separate steps in chat UIs.
+
+        Many clients display ``reasoning_content`` as HTML without ``pre-wrap``, so a single
+        ``\\n`` between lines collapses into one paragraph. Splitting on line breaks and
+        joining with blank lines yields Markdown-style paragraph breaks.
+        """
+        if not content:
+            return ""
+        lines = [ln.strip() for ln in content.splitlines() if ln.strip()]
+        if not lines:
+            return ""
+        return "\n\n".join(lines) + "\n\n"
+
     def _create_stream_chunk(self, content: str, role: str = None, finish_reason: str = None) -> str:
         """创建流式响应chunk"""
         import json
@@ -1897,7 +1912,7 @@ class GenerationHandler:
         if finish_reason:
             chunk["choices"][0]["delta"]["content"] = content
         else:
-            chunk["choices"][0]["delta"]["reasoning_content"] = content
+            chunk["choices"][0]["delta"]["reasoning_content"] = self._format_stream_reasoning_for_ui(content)
 
         return f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
 

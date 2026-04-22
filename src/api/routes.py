@@ -632,6 +632,10 @@ async def _build_gemini_parts_from_output(output: str) -> List[Dict[str, Any]]:
             parts.extend(_build_video_parts_from_uri(uri))
         return parts
 
+    # Progress / thought streams: blank-line-separated blocks render as separate steps in Gemini UIs.
+    blocks = [b.strip() for b in output.split("\n\n") if b.strip()]
+    if len(blocks) > 1:
+        return [{"text": b} for b in blocks]
     return [{"text": output}]
 
 
