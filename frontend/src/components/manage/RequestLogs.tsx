@@ -16,14 +16,13 @@ import {
   statusTone,
   tonePillClass,
   toneTextClass,
-  tryFormatJson,
 } from "./requestLogUi"
+import { LogDetailStatic } from "./LogDetailStatic"
 import { Card, CardContent, CardHeader, CardTitle } from "../ui/card"
 import { Button } from "../ui/button"
 import { Badge } from "../ui/badge"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../ui/table"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../ui/dialog"
-import { ScrollArea } from "../ui/scroll-area"
 import { toast } from "sonner"
 import { RefreshCw, Trash2, Loader2, Copy } from "lucide-react"
 import { cn } from "@/lib/utils"
@@ -35,36 +34,6 @@ async function copyText(text: string, okMsg = "Copied") {
   } catch {
     toast.error("Copy failed")
   }
-}
-
-function JsonBlock({
-  title,
-  body,
-  maxHeight,
-}: {
-  title: string
-  body: string | null | undefined
-  maxHeight: string
-}) {
-  const formatted = tryFormatJson(body) || "—"
-  return (
-    <div className="space-y-2">
-      <div className="flex items-center justify-between gap-2">
-        <h4 className="text-sm font-semibold tracking-tight">{title}</h4>
-        {formatted !== "—" ? (
-          <Button type="button" variant="ghost" size="sm" className="h-8 shrink-0 gap-1 text-xs" onClick={() => void copyText(formatted, `${title} copied`)}>
-            <Copy className="h-3.5 w-3.5" />
-            Copy
-          </Button>
-        ) : null}
-      </div>
-      <div className="rounded-lg border border-border bg-muted/40 p-0 overflow-hidden">
-        <ScrollArea className={cn("w-full", maxHeight)}>
-          <pre className="p-3 font-mono text-[11px] leading-relaxed whitespace-pre-wrap break-all text-foreground/90">{formatted}</pre>
-        </ScrollArea>
-      </div>
-    </div>
-  )
 }
 
 export function RequestLogs() {
@@ -294,88 +263,20 @@ export function RequestLogs() {
       </CardContent>
 
       <Dialog open={detailOpen} onOpenChange={setDetailOpen}>
-        <DialogContent className="max-w-3xl max-h-[88vh] overflow-hidden flex flex-col gap-0 p-0 sm:max-w-3xl">
-          <DialogHeader className="px-6 pt-6 pb-4 border-b shrink-0">
-            <DialogTitle className="flex items-center gap-2 text-base">
-              Log detail
-              {detail ? (
-                <span className="font-mono text-xs font-normal text-muted-foreground">#{detail.id}</span>
-              ) : null}
-            </DialogTitle>
+        <DialogContent className="flex max-h-[80vh] w-[calc(100vw-2rem)] max-w-3xl translate-x-[-50%] translate-y-[-50%] flex-col gap-0 overflow-hidden p-0 sm:max-w-3xl">
+          <DialogHeader className="shrink-0 flex-row items-center justify-between space-y-0 border-b border-border p-5 text-left">
+            <DialogTitle className="text-lg font-semibold leading-none">日志详情</DialogTitle>
           </DialogHeader>
-          <div className="overflow-y-auto flex-1 px-6 py-4 space-y-6">
+          <div className="min-h-0 flex-1 overflow-y-auto p-5">
             {detailLoading ? (
-              <div className="flex justify-center py-12">
-                <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+              <div className="flex items-center gap-2 rounded-md border border-border bg-muted/30 p-4 text-sm text-muted-foreground">
+                <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
+                日志详情加载中…
               </div>
             ) : detail ? (
-              <>
-                <section className="space-y-3">
-                  <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Overview</h3>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
-                    <div className="rounded-lg border bg-card/50 p-3 space-y-2">
-                      <div className="text-[11px] text-muted-foreground">Operation</div>
-                      <div className="flex flex-wrap gap-2 items-center">
-                        <span className={cn("inline-flex rounded-md border px-2 py-0.5 text-xs", operationChipClass(getOperationKind(detail.operation)))}>
-                          {operationLabel(getOperationKind(detail.operation), detail.operation)}
-                        </span>
-                        {detail.operation ? (
-                          <span className="font-mono text-[11px] text-muted-foreground truncate" title={detail.operation}>
-                            {detail.operation}
-                          </span>
-                        ) : null}
-                      </div>
-                    </div>
-                    <div className="rounded-lg border bg-card/50 p-3 space-y-2">
-                      <div className="text-[11px] text-muted-foreground">HTTP</div>
-                      <Badge variant="outline" className={cn("font-mono text-sm", tonePillClass[httpCodeTone(detail.status_code ?? undefined)])}>
-                        {detail.status_code ?? "—"}
-                      </Badge>
-                    </div>
-                    <div className="rounded-lg border bg-card/50 p-3 space-y-1 sm:col-span-2">
-                      <div className="text-[11px] text-muted-foreground">Status</div>
-                      <span className={cn("inline-flex rounded-md border px-2 py-0.5 text-xs", tonePillClass[statusTone(detail)])}>{formatLogStatus(detail)}</span>
-                    </div>
-                    <div className="rounded-lg border bg-card/50 p-3 space-y-1">
-                      <div className="text-[11px] text-muted-foreground">Token</div>
-                      <div className="text-sm break-all">{detail.token_email || "—"}</div>
-                      {detail.token_username ? <div className="text-xs text-muted-foreground">@{detail.token_username}</div> : null}
-                      {detail.token_id != null ? (
-                        <div className="font-mono text-xs text-muted-foreground">Token id: {detail.token_id}</div>
-                      ) : null}
-                    </div>
-                    <div className="rounded-lg border bg-card/50 p-3 space-y-1">
-                      <div className="text-[11px] text-muted-foreground">Duration</div>
-                      <div className="text-sm tabular-nums">{Number(detail.duration || 0).toFixed(2)}s</div>
-                    </div>
-                    <div className="rounded-lg border bg-card/50 p-3 space-y-1">
-                      <div className="text-[11px] text-muted-foreground">Created</div>
-                      <div className="text-sm">{detail.created_at ? new Date(detail.created_at).toLocaleString() : "—"}</div>
-                      {detail.created_at ? <div className="text-xs text-muted-foreground">{formatRelativeTime(detail.created_at)}</div> : null}
-                    </div>
-                    <div className="rounded-lg border bg-card/50 p-3 space-y-1">
-                      <div className="text-[11px] text-muted-foreground">Updated</div>
-                      <div className="text-sm">{detail.updated_at ? new Date(detail.updated_at).toLocaleString() : "—"}</div>
-                    </div>
-                  </div>
-                </section>
-
-                {detail.error_summary ? (
-                  <section className="space-y-2">
-                    <h3 className="text-xs font-semibold uppercase tracking-wide text-destructive">Error</h3>
-                    <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-4 text-sm text-destructive leading-relaxed">{detail.error_summary}</div>
-                  </section>
-                ) : null}
-
-                <section className="space-y-3 border-t pt-6">
-                  <JsonBlock title="Request body" body={detail.request_body} maxHeight="min(220px,28vh)" />
-                </section>
-                <section className="space-y-3">
-                  <JsonBlock title="Response body" body={detail.response_body} maxHeight="min(320px,36vh)" />
-                </section>
-              </>
+              <LogDetailStatic log={detail} />
             ) : (
-              <p className="text-muted-foreground text-sm py-8 text-center">No data</p>
+              <p className="py-8 text-center text-sm text-muted-foreground">无数据</p>
             )}
           </div>
         </DialogContent>
