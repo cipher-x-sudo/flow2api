@@ -35,3 +35,15 @@ services:
       - net.ipv4.conf.all.src_valid_mark=1
     volumes:
       - ./data:/var/lib/cloudflare-warp
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    image: flow2api-frontend:local
+    container_name: flow2api-frontend
+    ports:
+      - "38080:80"
+    depends_on:
+      - flow2api
+    restart: unless-stopped

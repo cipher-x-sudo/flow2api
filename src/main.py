@@ -201,38 +201,20 @@ app.mount("/tmp", StaticFiles(directory=str(tmp_dir)), name="tmp")
 # HTML routes for frontend
 static_path = Path(__file__).parent.parent / "static"
 
+# Serve static assets (js, css, images from Vite build)
+assets_path = static_path / "assets"
+if assets_path.exists():
+    app.mount("/assets", StaticFiles(directory=str(assets_path)), name="assets")
 
-@app.get("/", response_class=HTMLResponse)
-async def index():
-    """Redirect to login page"""
-    login_file = static_path / "login.html"
-    if login_file.exists():
-        return FileResponse(str(login_file))
-    return HTMLResponse(content="<h1>Flow2API</h1><p>Frontend not found</p>", status_code=404)
-
-
-@app.get("/login", response_class=HTMLResponse)
-async def login_page():
-    """Login page"""
-    login_file = static_path / "login.html"
-    if login_file.exists():
-        return FileResponse(str(login_file))
-    return HTMLResponse(content="<h1>Login Page Not Found</h1>", status_code=404)
-
-
-@app.get("/manage", response_class=HTMLResponse)
-async def manage_page():
-    """Management console page"""
-    manage_file = static_path / "manage.html"
-    if manage_file.exists():
-        return FileResponse(str(manage_file))
-    return HTMLResponse(content="<h1>Management Page Not Found</h1>", status_code=404)
-
-
-@app.get("/test", response_class=HTMLResponse)
-async def test_page():
-    """Model testing page"""
-    test_file = static_path / "test.html"
-    if test_file.exists():
-        return FileResponse(str(test_file))
-    return HTMLResponse(content="<h1>Test Page Not Found</h1>", status_code=404)
+@app.get("/{full_path:path}")
+async def serve_spa(full_path: str):
+    """Catch-all route to serve the React SPA"""
+    # If the user tries to access the API directly via an undefined route, let it return 404 naturally
+    # Or if it's an API route that somehow wasn't matched (though it should be matched earlier)
+    if full_path.startswith("api/"):
+        return HTMLResponse(content='{"detail": "Not Found"}', status_code=404)
+        
+    index_file = static_path / "index.html"
+    if index_file.exists():
+        return FileResponse(str(index_file))
+    return HTMLResponse(content="<h1>Flow2API GUI</h1><p>Frontend not found. Please build the frontend first.</p>", status_code=404)
