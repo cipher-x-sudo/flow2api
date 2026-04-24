@@ -1,3 +1,16 @@
+# Default stack: Flow2API + agent-gateway + redis (see docker-compose.agent-gateway.yml)
+COMPOSE_DEFAULT = docker compose -f docker-compose.yml -f docker-compose.agent-gateway.yml
+
+# Clear terminal (Unix), pull latest, rebuild images, start detached
+.PHONY: pull-up-docker
+pull-up-docker:
+	@command -v clear >/dev/null 2>&1 && clear || true; git pull && $(COMPOSE_DEFAULT) up -d --build
+
+# Same without clearing the screen (portable; use from CI or if `clear` is unwanted)
+.PHONY: pull-build-up
+pull-build-up:
+	git pull && $(COMPOSE_DEFAULT) up -d --build
+
 # Headed (Docker) — rebuild frontend + image, then start detached
 COMPOSE_HEADED = docker compose -f docker-compose.headed.yml
 COMPOSE_HEADED_TUNNEL = docker compose -f docker-compose.headed.yml -f docker-compose.headed.tunnel.yml
