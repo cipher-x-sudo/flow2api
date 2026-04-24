@@ -5,6 +5,7 @@ Reference material for HTTP endpoints and Pydantic models used by this project.
 | Document | Description |
 |----------|-------------|
 | [customer-guide-video-jobs.md](./customer-guide-video-jobs.md) | **Customer-facing:** image & video model ids, payloads, responses, job lifecycle, video upscaling, admin “call mode”, checklist |
+| [model-id-reference.md](./model-id-reference.md) | **Family-pattern tables:** decode `MODEL_CONFIG` ids (image prefixes + orientations + 2k/4k; video t2v/i2v/r2v groups, `model_key` rules, `_4k`/`_1080p` upscale) |
 | [generation.md](./generation.md) | Generation API overview (routes, auth) |
 | [generation-image.md](./generation-image.md) | Image model ids (`MODEL_CONFIG`, `type: "image"`) |
 | [generation-video.md](./generation-video.md) | Video model ids (t2v / i2v / r2v) |

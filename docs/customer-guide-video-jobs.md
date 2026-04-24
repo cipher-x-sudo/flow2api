@@ -4,7 +4,8 @@ This document is for **end customers and integrators** using Flow2API as an Open
 
 - **Image model list:** [section 2](#2-image-model-ids-catalog). **Video model list:** [section 3](#3-video-model-ids-catalog). **Aliases** (image only): [§2.1](#21-alias-and-generationconfig-image-only).  
 - Per-field details (aspect ratio, image counts, video upscalers) are also in [generation-image.md](./generation-image.md) and [generation-video.md](./generation-video.md).  
-- **Request and response examples:** [section 4](#4-request-format-headers-and-json-payloads) (including **§4.4** full response JSON for **image and video** generation, OpenAI and Gemini). Schemas: [models.md](./models.md) and [generation.md](./generation.md).
+- **Request and response examples:** [section 4](#4-request-format-headers-and-json-payloads) (including **§4.4** full response JSON for **image and video** generation, OpenAI and Gemini). Schemas: [models.md](./models.md) and [generation.md](./generation.md).  
+- **Decode model `id` patterns:** [model-id-reference.md](./model-id-reference.md) (family rows: orientation × resolution / upscale; video groups and `model_key` rules).
 
 ## Table of contents
 
@@ -649,6 +650,7 @@ Customers **do not** configure this; the **operator** of your Flow2API instance 
 
 | Topic | Document |
 |--------|----------|
+| Model id patterns (`MODEL_CONFIG` families) | [model-id-reference.md](./model-id-reference.md) |
 | Video model IDs and types (t2v / i2v / r2v) | [generation-video.md](./generation-video.md) |
 | Pydantic field names (`ChatCompletionRequest`, Gemini types) | [models.md](./models.md) |
 | Image models | [generation-image.md](./generation-image.md) |
