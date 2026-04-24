@@ -1,15 +1,39 @@
-import { useState } from "react"
-import { Link } from "react-router-dom"
+import { useMemo, useEffect } from "react"
+import { Link, useSearchParams } from "react-router-dom"
 import { Layout } from "../components/Layout"
 import { Tabs, TabsList, TabsTrigger } from "../components/ui/tabs"
 import { TokenManagement } from "../components/manage/TokenManagement"
 import { SystemSettings } from "../components/manage/SystemSettings"
 import { RequestLogs } from "../components/manage/RequestLogs"
 import { CacheManagement } from "../components/manage/CacheManagement"
+import { AgentGateway } from "../components/manage/AgentGateway"
 import { cn } from "@/lib/utils"
 
+const MANAGE_TABS = ["tokens", "settings", "logs", "cache", "agent"] as const
+type ManageTab = (typeof MANAGE_TABS)[number]
+
+function parseManageTab(raw: string | null): ManageTab {
+  if (raw && (MANAGE_TABS as readonly string[]).includes(raw)) return raw as ManageTab
+  return "tokens"
+}
+
 export default function Manage() {
-  const [tab, setTab] = useState("tokens")
+  const [searchParams, setSearchParams] = useSearchParams()
+  const tab = useMemo(
+    () => parseManageTab(searchParams.get("tab")),
+    [searchParams]
+  )
+  const setTab = (v: string) => {
+    if (v === "tokens") setSearchParams({})
+    else setSearchParams({ tab: v })
+  }
+  useEffect(() => {
+    const raw = searchParams.get("tab")
+    if (raw && !MANAGE_TABS.includes(raw as ManageTab)) {
+      setSearchParams({}, { replace: true })
+    }
+  }, [searchParams, setSearchParams])
+
   const settingsActive = tab === "settings"
   const cacheActive = tab === "cache"
 
@@ -50,6 +74,14 @@ export default function Manage() {
             >
               Cache management
             </TabsTrigger>
+            <TabsTrigger
+              value="agent"
+              className={cn(
+                "rounded-none border-b-2 border-transparent px-1 py-3 data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none"
+              )}
+            >
+              Agent gateway
+            </TabsTrigger>
           </TabsList>
         </Tabs>
         <Link
@@ -80,6 +112,11 @@ export default function Manage() {
       {tab === "cache" && (
         <div className="animate-in fade-in duration-300">
           <CacheManagement active={cacheActive} />
+        </div>
+      )}
+      {tab === "agent" && (
+        <div className="animate-in fade-in duration-300">
+          <AgentGateway />
         </div>
       )}
     </Layout>

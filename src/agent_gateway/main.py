@@ -34,6 +34,9 @@ app = FastAPI(
     title="Flow2API Agent Gateway",
     description="Bridges Flow2API remote_browser HTTP to WebSocket agents.",
     lifespan=lifespan,
+    # Operator UI: main Flow2API admin in frontend/ (Agent gateway tab), not Swagger here.
+    docs_url=None,
+    redoc_url=None,
 )
 app.add_middleware(
     CORSMiddleware,
