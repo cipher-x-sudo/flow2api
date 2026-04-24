@@ -869,6 +869,77 @@ async def refresh_at(
         raise HTTPException(status_code=500, detail=f"刷新AT失败: {str(e)}")
 
 
+def _project_to_dict(project):
+    to_iso = lambda value: value.isoformat() if hasattr(value, "isoformat") and value else None
+    return {
+        "id": project.id,
+        "project_id": project.project_id,
+        "project_name": project.project_name,
+        "is_active": bool(project.is_active),
+        "created_at": to_iso(project.created_at),
+    }
+
+
+@router.get("/api/tokens/{token_id}/projects")
+async def list_token_projects(
+    token_id: int,
+    token: str = Depends(verify_admin_token)
+):
+    """List VideoFX projects stored for a token."""
+    t = await token_manager.get_token(token_id)
+    if not t:
+        raise HTTPException(status_code=404, detail="Token not found")
+    projects = await token_manager.db.get_projects_by_token(token_id)
+    return {"success": True, "projects": [_project_to_dict(p) for p in projects]}
+
+
+@router.post("/api/tokens/{token_id}/projects")
+async def create_token_project(
+    token_id: int,
+    request: dict,
+    token: str = Depends(verify_admin_token)
+):
+    """Create a new VideoFX project for an existing token."""
+    t = await token_manager.get_token(token_id)
+    if not t:
+        raise HTTPException(status_code=404, detail="Token not found")
+
+    title = request.get("title")
+    if title is not None and not isinstance(title, str):
+        raise HTTPException(status_code=400, detail="title must be a string")
+    if isinstance(title, str):
+        title = title.strip() or None
+    set_as_current = request.get("set_as_current", True)
+    if not isinstance(set_as_current, bool):
+        raise HTTPException(status_code=400, detail="set_as_current must be a boolean")
+
+    try:
+        project = await token_manager.create_project_for_token(
+            token_id,
+            title=title,
+            set_as_current=set_as_current,
+        )
+        updated = await token_manager.get_token(token_id) if set_as_current else None
+        return {
+            "success": True,
+            "message": "Project created",
+            "project": _project_to_dict(project),
+            "token": (
+                {
+                    "id": updated.id,
+                    "current_project_id": updated.current_project_id,
+                    "current_project_name": updated.current_project_name,
+                }
+                if updated
+                else None
+            ),
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Create project failed: {str(e)}")
+
+
 @router.post("/api/tokens/st2at")
 async def st_to_at(
     request: ST2ATRequest,
@@ -1458,6 +1529,34 @@ async def get_cache_config(token: str = Depends(verify_admin_token)):
             "effective_base_url": effective_base_url
         }
     }
+
+
+@router.get("/api/cache/stats")
+async def get_cache_stats(token: str = Depends(verify_admin_token)):
+    """Disk usage for the file cache directory."""
+    from . import routes
+    if not routes.generation_handler or not routes.generation_handler.file_cache:
+        raise HTTPException(status_code=503, detail="File cache not initialized")
+    stats = routes.generation_handler.file_cache.get_dir_stats()
+    return {"success": True, **stats}
+
+
+@router.post("/api/cache/clear")
+async def clear_cache_files(token: str = Depends(verify_admin_token)):
+    """Delete all files in the cache directory (admin only)."""
+    from . import routes
+    if not routes.generation_handler or not routes.generation_handler.file_cache:
+        raise HTTPException(status_code=503, detail="File cache not initialized")
+    try:
+        removed_count, removed_bytes = routes.generation_handler.file_cache.clear_all_files()
+        return {
+            "success": True,
+            "message": "Cache cleared",
+            "removed_count": removed_count,
+            "removed_bytes": removed_bytes,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/api/cache/enabled")

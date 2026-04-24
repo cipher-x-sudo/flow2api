@@ -5,11 +5,13 @@ import { Tabs, TabsList, TabsTrigger } from "../components/ui/tabs"
 import { TokenManagement } from "../components/manage/TokenManagement"
 import { SystemSettings } from "../components/manage/SystemSettings"
 import { RequestLogs } from "../components/manage/RequestLogs"
+import { CacheManagement } from "../components/manage/CacheManagement"
 import { cn } from "@/lib/utils"
 
 export default function Manage() {
   const [tab, setTab] = useState("tokens")
   const settingsActive = tab === "settings"
+  const cacheActive = tab === "cache"
 
   return (
     <Layout>
@@ -40,6 +42,14 @@ export default function Manage() {
             >
               Request logs
             </TabsTrigger>
+            <TabsTrigger
+              value="cache"
+              className={cn(
+                "rounded-none border-b-2 border-transparent px-1 py-3 data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none"
+              )}
+            >
+              Cache management
+            </TabsTrigger>
           </TabsList>
         </Tabs>
         <Link
@@ -65,6 +75,11 @@ export default function Manage() {
       {tab === "logs" && (
         <div className="animate-in fade-in duration-300">
           <RequestLogs />
+        </div>
+      )}
+      {tab === "cache" && (
+        <div className="animate-in fade-in duration-300">
+          <CacheManagement active={cacheActive} />
         </div>
       )}
     </Layout>

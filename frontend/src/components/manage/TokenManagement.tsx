@@ -11,7 +11,9 @@ import { Input } from "../ui/input"
 import { Label } from "../ui/label"
 import { Textarea } from "../ui/textarea"
 import { toast } from "sonner"
-import { RefreshCw, Download, Upload, Plus, Loader2, RefreshCcw, Pencil, Trash2 } from "lucide-react"
+import { RefreshCw, Download, Upload, Plus, Loader2, RefreshCcw, Pencil, Trash2, FolderPlus } from "lucide-react"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select"
+import type { CreateProjectResponse } from "../../types/admin"
 
 function formatExpiryDisplay(atExpires: string | null | undefined): ReactNode {
   if (!atExpires) return <span className="text-muted-foreground">-</span>
@@ -104,6 +106,12 @@ export function TokenManagement() {
   const [editPreviewAt, setEditPreviewAt] = useState("")
 
   const [importFile, setImportFile] = useState<File | null>(null)
+
+  const [newProjectOpen, setNewProjectOpen] = useState(false)
+  const [newProjectTokenId, setNewProjectTokenId] = useState<string>("")
+  const [newProjectTitle, setNewProjectTitle] = useState("")
+  const [newProjectSetCurrent, setNewProjectSetCurrent] = useState(true)
+  const [newProjectSaving, setNewProjectSaving] = useState(false)
 
   const loadStats = useCallback(async () => {
     if (!token) return
@@ -398,6 +406,47 @@ export function TokenManagement() {
     }
   }
 
+  const openNewProject = () => {
+    const first = tokens[0]
+    setNewProjectTokenId(first ? String(first.id) : "")
+    setNewProjectTitle("")
+    setNewProjectSetCurrent(true)
+    setNewProjectOpen(true)
+  }
+
+  const submitNewProject = async () => {
+    if (!token) return
+    const tid = newProjectTokenId.trim()
+    if (!tid) {
+      toast.error("Select a token")
+      return
+    }
+    setNewProjectSaving(true)
+    try {
+      const r = await adminFetch(`/api/tokens/${tid}/projects`, token, {
+        method: "POST",
+        body: JSON.stringify({
+          title: newProjectTitle.trim() || null,
+          set_as_current: newProjectSetCurrent,
+        }),
+      })
+      if (!r) return
+      const d = (await r.json().catch(() => ({}))) as CreateProjectResponse & { detail?: string }
+      if (r.ok && d.success) {
+        const name = d.project?.project_name || "Project"
+        const pid = d.project?.project_id || ""
+        toast.success(pid ? `Created: ${name} (${pid.slice(0, 8)}…)` : `Created: ${name}`)
+        setNewProjectOpen(false)
+        await refreshAll()
+      } else {
+        const err = d.detail || (d as { message?: string }).message || "Create failed"
+        toast.error(typeof err === "string" ? err : "Create failed")
+      }
+    } finally {
+      setNewProjectSaving(false)
+    }
+  }
+
   return (
     <div className="space-y-6">
       <div className="grid gap-4 grid-cols-2 md:grid-cols-5">
@@ -458,6 +507,9 @@ export function TokenManagement() {
             </Button>
             <Button size="sm" onClick={() => setAddOpen(true)}>
               <Plus className="h-4 w-4 mr-2" /> Add
+            </Button>
+            <Button size="sm" variant="outline" onClick={openNewProject} disabled={!tokens.length} title="Create a VideoFX project for a token">
+              <FolderPlus className="h-4 w-4 mr-2" /> New project
             </Button>
           </div>
         </CardHeader>
@@ -667,6 +719,52 @@ export function TokenManagement() {
             </Button>
             <Button onClick={submitEdit} disabled={saving}>
               {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : "Save"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={newProjectOpen} onOpenChange={setNewProjectOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>New project</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div>
+              <Label>Token</Label>
+              <Select value={newProjectTokenId} onValueChange={setNewProjectTokenId}>
+                <SelectTrigger className="mt-1 w-full">
+                  <SelectValue placeholder="Select account" />
+                </SelectTrigger>
+                <SelectContent>
+                  {tokens.map((t) => (
+                    <SelectItem key={t.id} value={String(t.id)}>
+                      {t.email || `Token #${t.id}`}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label>Project title (optional)</Label>
+              <Input
+                className="mt-1"
+                value={newProjectTitle}
+                onChange={(e) => setNewProjectTitle(e.target.value)}
+                placeholder="Leave empty for auto name (e.g. … P3)"
+              />
+            </div>
+            <div className="flex items-center gap-2">
+              <Switch checked={newProjectSetCurrent} onCheckedChange={setNewProjectSetCurrent} />
+              <Label className="!mt-0">Set as current project for this token</Label>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setNewProjectOpen(false)}>
+              Cancel
+            </Button>
+            <Button onClick={submitNewProject} disabled={newProjectSaving || !newProjectTokenId}>
+              {newProjectSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : "Create"}
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -5,7 +5,7 @@ import hashlib
 import time
 import mimetypes
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Tuple
 from datetime import datetime, timedelta
 from urllib.parse import urlparse
 from curl_cffi.requests import AsyncSession
@@ -490,21 +490,49 @@ class FileCache:
         """Get current cache timeout"""
         return self.default_timeout
 
-    async def clear_all(self):
-        """Clear all cached files"""
+    def get_dir_stats(self) -> Dict[str, Any]:
+        """Return file count, total size, and resolved cache directory path."""
+        total_bytes = 0
+        file_count = 0
         try:
-            removed_count = 0
+            if not self.cache_dir.exists():
+                return {
+                    "cache_dir": str(self.cache_dir.resolve()),
+                    "file_count": 0,
+                    "total_bytes": 0,
+                }
             for file_path in self.cache_dir.iterdir():
                 if file_path.is_file():
                     try:
+                        total_bytes += file_path.stat().st_size
+                        file_count += 1
+                    except OSError:
+                        pass
+        except OSError as e:
+            debug_logger.log_warning(f"get_dir_stats: {e}")
+        return {
+            "cache_dir": str(self.cache_dir.resolve()),
+            "file_count": file_count,
+            "total_bytes": total_bytes,
+        }
+
+    def clear_all_files(self) -> Tuple[int, int]:
+        """Delete all files in cache_dir. Returns (removed_count, removed_bytes)."""
+        removed_count = 0
+        removed_bytes = 0
+        try:
+            if not self.cache_dir.exists():
+                return 0, 0
+            for file_path in self.cache_dir.iterdir():
+                if file_path.is_file():
+                    try:
+                        removed_bytes += file_path.stat().st_size
                         file_path.unlink()
                         removed_count += 1
-                    except Exception:
+                    except OSError:
                         pass
-
-            debug_logger.log_info(f"Cache cleared: removed {removed_count} files")
-            return removed_count
-
+            debug_logger.log_info(f"Cache cleared: removed {removed_count} files ({removed_bytes} bytes)")
+            return removed_count, removed_bytes
         except Exception as e:
             debug_logger.log_error(
                 error_message=f"Failed to clear cache: {str(e)}",
@@ -512,3 +540,8 @@ class FileCache:
                 response_text=""
             )
             raise
+
+    async def clear_all(self) -> int:
+        """Clear all cached files (async wrapper). Returns removed file count."""
+        count, _ = self.clear_all_files()
+        return count

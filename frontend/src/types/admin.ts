@@ -67,3 +67,38 @@ export interface ImportTokenItem {
   image_concurrency?: number
   video_concurrency?: number
 }
+
+export interface CacheConfigResponse {
+  success?: boolean
+  config?: {
+    enabled?: boolean
+    timeout?: number
+    base_url?: string
+    effective_base_url?: string
+  }
+}
+
+export interface CacheStatsResponse {
+  success?: boolean
+  cache_dir?: string
+  file_count?: number
+  total_bytes?: number
+}
+
+export interface TokenProjectRow {
+  id?: number
+  project_id: string
+  project_name: string
+  is_active?: boolean
+  created_at?: string | null
+}
+
+export interface CreateProjectResponse {
+  success?: boolean
+  project?: TokenProjectRow
+  token?: {
+    id?: number
+    current_project_id?: string | null
+    current_project_name?: string | null
+  }
+}

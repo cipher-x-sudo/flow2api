@@ -624,6 +624,55 @@ class TokenManager:
             except Exception as e:
                 raise ValueError(f"Failed to prepare project pool: {str(e)}")
 
+    async def create_project_for_token(
+        self,
+        token_id: int,
+        title: Optional[str] = None,
+        set_as_current: bool = True,
+    ) -> Project:
+        """Create a new VideoFX project for an existing token and persist it in the projects table."""
+        project_lock = await self._get_token_lock(
+            self._project_locks,
+            self._project_lock_guard,
+            token_id,
+        )
+        async with project_lock:
+            token = await self.db.get_token(token_id)
+            if not token:
+                raise ValueError("Token not found")
+            st = (token.st or "").strip()
+            if not st:
+                raise ValueError("Token has no session token")
+
+            projects = [p for p in await self.db.get_projects_by_token(token_id) if p.is_active]
+            projects = self._sort_projects(projects)
+            next_index = len(projects) + 1
+
+            raw = (title or "").strip()
+            if raw:
+                project_title = raw[:120]
+            else:
+                base = self._normalize_project_name_base(
+                    token.current_project_name or token.remark
+                )
+                project_title = self._build_project_name(next_index, base)
+
+            project_id = await self.flow_client.create_project(st, project_title)
+            project = Project(
+                project_id=project_id,
+                token_id=token_id,
+                project_name=project_title,
+                tool_name="PINHOLE",
+            )
+            project.id = await self.db.add_project(project)
+            if set_as_current:
+                await self.db.update_token(
+                    token_id,
+                    current_project_id=project_id,
+                    current_project_name=project_title,
+                )
+            return project
+
     async def record_usage(self, token_id: int, is_video: bool = False):
         """Record token usage"""
         await self.db.update_token(token_id, use_count=1, last_used_at=datetime.now())

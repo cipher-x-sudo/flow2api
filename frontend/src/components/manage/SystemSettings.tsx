@@ -81,11 +81,6 @@ export function SystemSettings({ active }: { active: boolean }) {
 
   const [callMode, setCallMode] = useState<"default" | "polling">("default")
 
-  const [cacheEnabled, setCacheEnabled] = useState(true)
-  const [cacheTimeout, setCacheTimeout] = useState("7200")
-  const [cacheBaseUrl, setCacheBaseUrl] = useState("")
-  const [cacheEffectiveUrl, setCacheEffectiveUrl] = useState("")
-
   const [pluginUrl, setPluginUrl] = useState("")
   const [pluginToken, setPluginToken] = useState("")
   const [pluginAutoEnable, setPluginAutoEnable] = useState(false)
@@ -97,7 +92,7 @@ export function SystemSettings({ active }: { active: boolean }) {
   const loadAll = useCallback(async () => {
     if (!token || !active) return
 
-    const [a, p, g, c, cache, plug, cap] = await Promise.all([
+    const [a, p, g, c, plug, cap] = await Promise.all([
       adminJson<{
         admin_username?: string
         api_key?: string
@@ -113,10 +108,6 @@ export function SystemSettings({ active }: { active: boolean }) {
         token
       ),
       adminJson<{ success?: boolean; config?: { call_mode?: string } }>("/api/call-logic/config", token),
-      adminJson<{
-        success?: boolean
-        config?: { enabled?: boolean; timeout?: number; base_url?: string; effective_base_url?: string }
-      }>("/api/cache/config", token),
       adminJson<{ success?: boolean; config?: { connection_url?: string; connection_token?: string; auto_enable_on_update?: boolean } }>(
         "/api/plugin/config",
         token
@@ -143,12 +134,6 @@ export function SystemSettings({ active }: { active: boolean }) {
     }
     if (c.ok && c.data?.success && c.data.config?.call_mode)
       setCallMode(c.data.config.call_mode === "polling" ? "polling" : "default")
-    if (cache.ok && cache.data?.success && cache.data.config) {
-      setCacheEnabled(cache.data.config.enabled !== false)
-      setCacheTimeout(String(cache.data.config.timeout ?? 7200))
-      setCacheBaseUrl(cache.data.config.base_url || "")
-      setCacheEffectiveUrl(cache.data.config.effective_base_url || "")
-    }
     if (plug.ok && plug.data?.success && plug.data.config) {
       setPluginUrl(plug.data.config.connection_url || "")
       setPluginToken(plug.data.config.connection_token || "")
@@ -379,44 +364,6 @@ export function SystemSettings({ active }: { active: boolean }) {
       const d = await r.json()
       if (d.success) toast.success("Call logic saved")
       else toast.error(d.message || "Failed")
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const saveCache = async () => {
-    if (!token) return
-    const timeout = cacheTimeout.trim() === "" ? 7200 : parseInt(cacheTimeout, 10)
-    const baseUrl = cacheBaseUrl.trim()
-    if (Number.isNaN(timeout) || timeout < 0 || timeout > 86400) return toast.error("Cache timeout 0–86400")
-    if (baseUrl && !baseUrl.startsWith("http://") && !baseUrl.startsWith("https://")) return toast.error("Base URL must start with http(s)://")
-    setBusy(true)
-    try {
-      const r0 = await adminFetch("/api/cache/enabled", token, {
-        method: "POST",
-        body: JSON.stringify({ enabled: cacheEnabled }),
-      })
-      if (!r0) return
-      const d0 = await r0.json()
-      if (!d0.success) return toast.error("Cache enabled save failed")
-      const r1 = await adminFetch("/api/cache/config", token, {
-        method: "POST",
-        body: JSON.stringify({ timeout }),
-      })
-      if (!r1) return
-      const d1 = await r1.json()
-      if (!d1.success) return toast.error("Cache timeout save failed")
-      const r2 = await adminFetch("/api/cache/base-url", token, {
-        method: "POST",
-        body: JSON.stringify({ base_url: baseUrl }),
-      })
-      if (!r2) return
-      const d2 = await r2.json()
-      if (d2.success) {
-        toast.success("Cache config saved")
-        await new Promise((r) => setTimeout(r, 200))
-        await loadAll()
-      } else toast.error("Cache base URL failed")
     } finally {
       setBusy(false)
     }
@@ -663,38 +610,6 @@ export function SystemSettings({ active }: { active: boolean }) {
           </div>
           <Button onClick={saveCallLogic} disabled={busy}>
             Save
-          </Button>
-        </CardContent>
-      </Card>
-
-      <Card className="lg:col-span-2">
-        <CardHeader>
-          <CardTitle>Cache</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="flex items-center gap-2">
-            <Switch checked={cacheEnabled} onCheckedChange={setCacheEnabled} />
-            <Label>Enable file cache</Label>
-          </div>
-          {cacheEnabled ? (
-            <>
-              <div>
-                <Label>Cache TTL (seconds)</Label>
-                <Input type="number" className="mt-1" value={cacheTimeout} onChange={(e) => setCacheTimeout(e.target.value)} />
-              </div>
-              <div>
-                <Label>Public base URL for cached files</Label>
-                <Input className="mt-1" value={cacheBaseUrl} onChange={(e) => setCacheBaseUrl(e.target.value)} placeholder="https://yourdomain.com" />
-              </div>
-              {cacheEffectiveUrl ? (
-                <p className="text-xs text-muted-foreground">
-                  Effective URL: <code className="bg-muted px-1 rounded">{cacheEffectiveUrl}</code>
-                </p>
-              ) : null}
-            </>
-          ) : null}
-          <Button onClick={saveCache} disabled={busy}>
-            Save cache settings
           </Button>
         </CardContent>
       </Card>
