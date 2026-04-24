@@ -11,6 +11,13 @@ pull-up-docker:
 pull-build-up:
 	git pull && $(COMPOSE_DEFAULT) up -d --build
 
+# Flow2API + agent-gateway + redis + cloudflared (TUNNEL_TOKEN in .env). Add Public Hostname → http://agent-gateway:9080
+COMPOSE_AGENT_TUNNEL = docker compose -f docker-compose.yml -f docker-compose.agent-gateway.yml -f docker-compose.tunnel.yml -f docker-compose.agent-gateway.tunnel.yml
+
+.PHONY: pull-up-agent-tunnel
+pull-up-agent-tunnel:
+	@command -v clear >/dev/null 2>&1 && clear || true; git pull && $(COMPOSE_AGENT_TUNNEL) up -d --build
+
 # Headed (Docker) — rebuild frontend + image, then start detached
 COMPOSE_HEADED = docker compose -f docker-compose.headed.yml
 COMPOSE_HEADED_TUNNEL = docker compose -f docker-compose.headed.yml -f docker-compose.headed.tunnel.yml

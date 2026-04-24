@@ -43,6 +43,27 @@ If Flow2API runs on the host and the gateway only in Docker, use `http://127.0.0
 
 - [`src/agent_gateway/`](../src/agent_gateway/) — FastAPI app, HTTP routes, WebSocket handler, in-memory registry.
 
+## Cloudflare Tunnel (agent gateway on the internet)
+
+Use the **same** `TUNNEL_TOKEN` as the main Flow2API tunnel (one `cloudflared` container; do not run two tunnels with the same token).
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.agent-gateway.yml -f docker-compose.tunnel.yml -f docker-compose.agent-gateway.tunnel.yml up -d --build
+```
+
+Set `TUNNEL_TOKEN` in `.env` (see root `.env.example`). The merge file [`docker-compose.agent-gateway.tunnel.yml`](../docker-compose.agent-gateway.tunnel.yml) makes `cloudflared` start after both `flow2api` and `agent-gateway`.
+
+In [Cloudflare Zero Trust](https://one.dash.cloudflare.com/) → **Networks** → **Tunnels** → your tunnel → **Public hostnames**, add a **new** hostname for the gateway (in addition to any `flow-api` / `admin-flow` routes you already have):
+
+| Public hostname | Service | Internal URL |
+|-----------------|---------|--------------|
+| `https://agents.example.com` (your choice) | HTTP | `http://agent-gateway:9080` |
+
+- **PC agents (Node):** connect with **`wss://agents.example.com/ws/agents`** (TLS at the edge; Cloudflare supports WebSockets to the origin).
+- **Flow2API** (inside Docker) should keep using **`http://agent-gateway:9080`** for `remote_browser_base_url` — do not use the public URL there; the call stays on the bridge network.
+
+If you use `FLOW2API_API_ONLY_HOST` on the API hostname, that only affects the main app; the new `agents.*` hostname is separate.
+
 ## Phase 2
 
-A **Node.js** agent will connect to `ws://` or `wss://` and implement the protocol in [`src/agent_gateway/README.md`](../src/agent_gateway/README.md).
+A **Node.js** agent will connect to `wss://` (via tunnel) or `ws://` (local) and implement the protocol in [`src/agent_gateway/README.md`](../src/agent_gateway/README.md).
