@@ -1,7 +1,7 @@
 import { useMemo, useEffect } from "react"
 import { Link, useSearchParams } from "react-router-dom"
 import { Layout } from "../components/Layout"
-import { Tabs, TabsList, TabsTrigger } from "../components/ui/tabs"
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "../components/ui/tabs"
 import { TokenManagement } from "../components/manage/TokenManagement"
 import { SystemSettings } from "../components/manage/SystemSettings"
 import { RequestLogs } from "../components/manage/RequestLogs"
@@ -34,14 +34,11 @@ export default function Manage() {
     }
   }, [searchParams, setSearchParams])
 
-  const settingsActive = tab === "settings"
-  const cacheActive = tab === "cache"
-
   return (
     <Layout>
-      <div className="border-b border-border mb-6 flex flex-wrap items-end gap-6">
-        <Tabs value={tab} onValueChange={setTab} className="flex-1 min-w-0">
-          <TabsList className="h-auto w-full justify-start rounded-none bg-transparent p-0 gap-6">
+      <Tabs value={tab} onValueChange={setTab} className="w-full">
+        <div className="border-b border-border mb-6 flex flex-wrap items-end gap-6">
+          <TabsList className="h-auto w-full min-w-0 flex-1 justify-start rounded-none bg-transparent p-0 gap-6">
             <TabsTrigger
               value="tokens"
               className={cn(
@@ -83,42 +80,42 @@ export default function Manage() {
               Agent gateway
             </TabsTrigger>
           </TabsList>
-        </Tabs>
-        <Link
-          to="/test"
-          className={cn(
-            "text-sm font-medium py-3 px-1 border-b-2 border-transparent text-muted-foreground hover:text-foreground transition-colors shrink-0 mb-px"
-          )}
-        >
-          Test page
-        </Link>
-      </div>
+          <Link
+            to="/test"
+            className={cn(
+              "text-sm font-medium py-3 px-1 border-b-2 border-transparent text-muted-foreground hover:text-foreground transition-colors shrink-0 mb-px"
+            )}
+          >
+            Test page
+          </Link>
+        </div>
 
-      {tab === "tokens" && (
-        <div className="animate-in fade-in duration-300">
-          <TokenManagement />
-        </div>
-      )}
-      {tab === "settings" && (
-        <div className="animate-in fade-in duration-300">
-          <SystemSettings active={settingsActive} />
-        </div>
-      )}
-      {tab === "logs" && (
-        <div className="animate-in fade-in duration-300">
-          <RequestLogs />
-        </div>
-      )}
-      {tab === "cache" && (
-        <div className="animate-in fade-in duration-300">
-          <CacheManagement active={cacheActive} />
-        </div>
-      )}
-      {tab === "agent" && (
-        <div className="animate-in fade-in duration-300">
-          <AgentGateway />
-        </div>
-      )}
+        <TabsContent value="tokens" className="mt-0 outline-none focus-visible:ring-0">
+          <div className="animate-in fade-in duration-300">
+            <TokenManagement />
+          </div>
+        </TabsContent>
+        <TabsContent value="settings" className="mt-0 outline-none focus-visible:ring-0">
+          <div className="animate-in fade-in duration-300">
+            <SystemSettings active={true} />
+          </div>
+        </TabsContent>
+        <TabsContent value="logs" className="mt-0 outline-none focus-visible:ring-0">
+          <div className="animate-in fade-in duration-300">
+            <RequestLogs />
+          </div>
+        </TabsContent>
+        <TabsContent value="cache" className="mt-0 outline-none focus-visible:ring-0">
+          <div className="animate-in fade-in duration-300">
+            <CacheManagement active={true} />
+          </div>
+        </TabsContent>
+        <TabsContent value="agent" className="mt-0 outline-none focus-visible:ring-0">
+          <div className="animate-in fade-in duration-300">
+            <AgentGateway />
+          </div>
+        </TabsContent>
+      </Tabs>
     </Layout>
   )
 }
