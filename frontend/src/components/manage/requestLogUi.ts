@@ -148,7 +148,7 @@ export function formatRelativeTime(iso: string | null | undefined): string {
   if (Number.isNaN(then)) return ""
   const now = Date.now()
   const diffSec = Math.round((then - now) / 1000)
-  const rtf = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" })
+  const rtf = new Intl.RelativeTimeFormat("en", { numeric: "auto" })
   const abs = Math.abs(diffSec)
   if (abs < 60) return rtf.format(Math.round(diffSec), "second")
   if (abs < 3600) return rtf.format(Math.round(diffSec / 60), "minute")

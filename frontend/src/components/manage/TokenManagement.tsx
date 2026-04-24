@@ -18,8 +18,8 @@ function formatExpiryDisplay(atExpires: string | null | undefined): ReactNode {
   const d = new Date(atExpires)
   const now = new Date()
   const diff = d.getTime() - now.getTime()
-  const dateStr = d.toLocaleDateString(undefined, { year: "numeric", month: "2-digit", day: "2-digit" })
-  const timeStr = d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", hour12: false })
+  const dateStr = d.toLocaleDateString("en-US", { year: "numeric", month: "2-digit", day: "2-digit" })
+  const timeStr = d.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false })
   const title = `${dateStr} ${timeStr}`
   const hours = Math.floor(diff / 36e5)
   if (diff < 0)
@@ -359,7 +359,7 @@ export function TokenManagement() {
     if (!r) return
     const d = await r.json().catch(() => ({}))
     if (d.success) {
-      const exp = d.token?.at_expires ? new Date(d.token.at_expires).toLocaleString() : "unknown"
+      const exp = d.token?.at_expires ? new Date(d.token.at_expires).toLocaleString("en-US") : "unknown"
       toast.success(`AT updated. Expires: ${exp}`)
       await refreshAll()
     } else toast.error(d.detail || "Refresh AT failed")

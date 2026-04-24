@@ -2,14 +2,8 @@ import { useState, useEffect, useCallback } from "react"
 import { useAuth } from "../../contexts/AuthContext"
 import { adminFetch, adminJson } from "../../lib/adminApi"
 import type { LogDetail, LogListItem } from "../../types/admin"
-import {
-  formatLogOutcomeRowClass,
-  formatLogOutcomeZh,
-  formatLogProgressField,
-  formatLogStatusZh,
-  logStatusPillClass,
-  statusCodePillClass,
-} from "./requestLogDetail"
+import { formatLogOutcomeRowClass, formatLogProgressField, logStatusPillClass, statusCodePillClass } from "./requestLogDetail"
+import { formatLogStatus, formatOutcome } from "./requestLogUi"
 import { LogDetailStatic } from "./LogDetailStatic"
 import { Card, CardContent, CardHeader, CardTitle } from "../ui/card"
 import { Button } from "../ui/button"
@@ -36,7 +30,7 @@ export function RequestLogs() {
       const data = (await r.json()) as LogListItem[]
       setLogs(Array.isArray(data) ? data : [])
     } catch {
-      toast.error("加载日志失败")
+      toast.error("Failed to load logs")
     } finally {
       setLoading(false)
     }
@@ -50,19 +44,19 @@ export function RequestLogs() {
 
   const clearLogs = async () => {
     if (!token) return
-    if (!confirm("确定要清空所有日志吗？此操作不可恢复！")) return
+    if (!confirm("Clear all request logs? This cannot be undone.")) return
     try {
       const r = await adminFetch("/api/logs", token, { method: "DELETE" })
       if (!r) return
       const d = await r.json().catch(() => ({}))
       if (d.success) {
-        toast.success("日志已清空")
+        toast.success("Logs cleared")
         setLogs([])
         setDetailOpen(false)
         setDetail(null)
-      } else toast.error(d.message || "清空失败")
+      } else toast.error(d.message || "Failed to clear logs")
     } catch {
-      toast.error("网络错误")
+      toast.error("Network error")
     }
   }
 
@@ -74,12 +68,12 @@ export function RequestLogs() {
     try {
       const { ok, data } = await adminJson<LogDetail>(`/api/logs/${id}`, token)
       if (!ok || !data) {
-        toast.error("加载日志详情失败")
+        toast.error("Failed to load log details")
         return
       }
       setDetail(data)
     } catch {
-      toast.error("加载日志详情失败")
+      toast.error("Failed to load log details")
     } finally {
       setDetailLoading(false)
     }
@@ -90,7 +84,7 @@ export function RequestLogs() {
   return (
     <Card>
       <CardHeader className="flex flex-row items-center justify-between gap-4 pb-4 border-b">
-        <CardTitle className="text-lg font-semibold">请求日志</CardTitle>
+        <CardTitle className="text-lg font-semibold">Request logs</CardTitle>
         <div className="flex gap-2">
           <Button
             variant="ghost"
@@ -99,9 +93,9 @@ export function RequestLogs() {
             className="h-8 text-sm text-destructive hover:text-destructive hover:bg-red-50"
           >
             <Trash2 className="h-4 w-4 mr-1" />
-            清空
+            Clear
           </Button>
-          <Button variant="ghost" size="icon" onClick={() => void fetchLogs()} disabled={loading} className="h-8 w-8" title="刷新">
+          <Button variant="ghost" size="icon" onClick={() => void fetchLogs()} disabled={loading} className="h-8 w-8" title="Refresh">
             <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} />
           </Button>
         </div>
@@ -111,15 +105,15 @@ export function RequestLogs() {
           <Table>
             <TableHeader className="sticky top-0 z-20 bg-background">
               <TableRow className="hover:bg-transparent border-b">
-                <TableHead className="h-10 px-3 text-left font-medium text-muted-foreground">操作</TableHead>
-                <TableHead className="h-10 px-3 text-left font-medium text-muted-foreground">Token 邮箱</TableHead>
-                <TableHead className="h-10 px-3 text-left font-medium text-muted-foreground">状态</TableHead>
-                <TableHead className="h-10 px-3 text-left font-medium text-muted-foreground">进度</TableHead>
-                <TableHead className="h-10 px-3 text-left font-medium text-muted-foreground">状态码</TableHead>
-                <TableHead className="h-10 w-[17rem] max-w-[17rem] px-3 text-left font-medium text-muted-foreground">结果摘要</TableHead>
-                <TableHead className="h-10 px-3 text-left font-medium text-muted-foreground">耗时(秒)</TableHead>
-                <TableHead className="h-10 px-3 text-left font-medium text-muted-foreground">时间</TableHead>
-                <TableHead className="h-10 px-3 text-left font-medium text-muted-foreground">详情</TableHead>
+                <TableHead className="h-10 px-3 text-left font-medium text-muted-foreground">Operation</TableHead>
+                <TableHead className="h-10 px-3 text-left font-medium text-muted-foreground">Token email</TableHead>
+                <TableHead className="h-10 px-3 text-left font-medium text-muted-foreground">Status</TableHead>
+                <TableHead className="h-10 px-3 text-left font-medium text-muted-foreground">Progress</TableHead>
+                <TableHead className="h-10 px-3 text-left font-medium text-muted-foreground">HTTP</TableHead>
+                <TableHead className="h-10 w-[17rem] max-w-[17rem] px-3 text-left font-medium text-muted-foreground">Summary</TableHead>
+                <TableHead className="h-10 px-3 text-left font-medium text-muted-foreground">Duration (s)</TableHead>
+                <TableHead className="h-10 px-3 text-left font-medium text-muted-foreground">Time</TableHead>
+                <TableHead className="h-10 px-3 text-left font-medium text-muted-foreground">Details</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -129,18 +123,18 @@ export function RequestLogs() {
                     {loading ? (
                       <span className="inline-flex items-center gap-2 justify-center">
                         <Loader2 className="h-5 w-5 animate-spin" />
-                        加载中…
+                        Loading…
                       </span>
                     ) : (
-                      "暂无日志"
+                      "No logs yet"
                     )}
                   </TableCell>
                 </TableRow>
               ) : (
                 logs.map((log) => {
-                  const outcome = formatLogOutcomeZh(log)
+                  const outcome = formatOutcome(log)
                   const outcomePreview = outcome.length > 96 ? `${outcome.slice(0, 93)}…` : outcome
-                  const email = log.token_email || "未知"
+                  const email = log.token_email || "Unknown"
                   return (
                     <TableRow key={log.id} className="border-border/60">
                       <TableCell className="py-2.5 px-3 text-sm align-top">{log.operation || "-"}</TableCell>
@@ -153,7 +147,7 @@ export function RequestLogs() {
                         <span
                           className={cn("inline-flex items-center rounded px-2 py-0.5 text-xs", logStatusPillClass(log))}
                         >
-                          {formatLogStatusZh(log)}
+                          {formatLogStatus(log)}
                         </span>
                       </TableCell>
                       <TableCell className="py-2.5 px-3 text-xs align-top text-foreground">
@@ -184,7 +178,7 @@ export function RequestLogs() {
                         {Number(log.duration || 0).toFixed(2)}
                       </TableCell>
                       <TableCell className="py-2.5 px-3 text-xs text-muted-foreground align-top whitespace-nowrap">
-                        {log.created_at ? new Date(log.created_at).toLocaleString("zh-CN") : "-"}
+                        {log.created_at ? new Date(log.created_at).toLocaleString("en-US") : "—"}
                       </TableCell>
                       <TableCell className="py-2.5 px-3 align-top">
                         <Button
@@ -193,7 +187,7 @@ export function RequestLogs() {
                           onClick={() => void openDetail(log.id)}
                           className="h-7 px-2 text-xs hover:bg-blue-50 hover:text-blue-700"
                         >
-                          详情
+                          View
                         </Button>
                       </TableCell>
                     </TableRow>

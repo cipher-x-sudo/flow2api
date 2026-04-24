@@ -1,40 +1,8 @@
 import type { LogListItem } from "../../types/admin"
+import { formatLogStatus } from "./requestLogUi"
 
 /** Logs may include `response_body` on detail fetches; list rows omit it. */
 type LogWithResponseBody = LogListItem & { response_body?: string | null }
-
-/** Same labels as `static/manage.html` `formatLogStatus` (Chinese). */
-const STATUS_MAP_ZH: Record<string, string> = {
-  started: "已启动",
-  token_selected: "已选中账号",
-  token_ready: "准备生成环境",
-  project_ready: "项目已就绪",
-  uploading_images: "上传参考图中",
-  solving_image_captcha: "图片打码验证中",
-  submitting_image: "图片提交中",
-  image_generated: "图片生成完成",
-  preparing_video: "准备视频任务",
-  submitting_video: "视频提交中",
-  video_submitted: "视频任务已提交",
-  video_polling: "视频生成中",
-  caching_image: "缓存图片中",
-  caching_video: "缓存视频中",
-  completed: "已完成",
-  failed: "失败",
-  processing: "处理中",
-  upsampling_2k: "正在放大到2K",
-  upsampling_4k: "正在放大到4K",
-  upsampling_1080p: "正在放大到1080P",
-}
-
-export function formatLogStatusZh(l: LogListItem): string {
-  const statusText = (l.status_text || "").trim()
-  if (statusText) return STATUS_MAP_ZH[statusText] || statusText.replace(/_/g, " ")
-  if (l.status_code === 102) return "处理中"
-  if (l.status_code === 200) return "已完成"
-  if (l.status_code != null && l.status_code >= 400) return "失败"
-  return "-"
-}
 
 export function parseLogJson(raw: string | null | undefined): unknown | null {
   if (!raw) return null
@@ -123,24 +91,6 @@ export function extractLogPrimaryUrl(responseBodyObj: unknown): string | null {
   )
 }
 
-export function extractLogSuccessSummary(log: LogListItem | null | undefined, responseBodyObj: unknown): string {
-  if (Number(log?.status_code) !== 200) return ""
-  if (!responseBodyObj || typeof responseBodyObj !== "object") return "生成成功，已返回结果"
-  const o = responseBodyObj as Record<string, unknown>
-  const assets = o.generated_assets as Record<string, unknown> | undefined
-  if (assets && typeof assets === "object" && assets.upscaled_image && typeof assets.upscaled_image === "object") {
-    const up = assets.upscaled_image as { resolution?: string }
-    return `生成成功，已返回${up.resolution || "高清"}结果`
-  }
-  const directUrl = extractLogPrimaryUrl(responseBodyObj)
-  if (directUrl) {
-    if (isVideoUrl(directUrl)) return "生成成功，已返回视频结果"
-    if (isImageUrl(directUrl)) return "生成成功，已返回图片结果"
-    return "生成成功，已返回结果地址"
-  }
-  return o.status === "success" ? "生成成功" : "生成成功，已返回结果"
-}
-
 /** English copy for the light “Log details” template (list/detail UI). */
 export function extractLogSuccessSummaryEn(
   log: LogListItem | null | undefined,
@@ -189,18 +139,18 @@ export function formatLogPayload(raw: string | null | undefined): string {
       (_, value: unknown) => {
         if (typeof value !== "string") return value
         if (value.length <= 4096) return value
-        if (/^data:(image|video)\//i.test(value)) return `[数据URL已省略，长度=${value.length}]`
+        if (/^data:(image|video)\//i.test(value)) return `[data URL omitted, length=${value.length}]`
         const sample = value.slice(0, 256)
-        if (/^[A-Za-z0-9+/=\r\n]+$/.test(sample)) return `[大体积Base64已省略，长度=${value.length}]`
-        return `${value.slice(0, 800)}... [已截断，长度=${value.length}]`
+        if (/^[A-Za-z0-9+/=\r\n]+$/.test(sample)) return `[large base64 omitted, length=${value.length}]`
+        return `${value.slice(0, 800)}... [truncated, length=${value.length}]`
       },
       2
     )
   }
-  if (!raw) return "无"
+  if (!raw) return "—"
   const text = String(raw)
   if (text.length <= 6000) return text
-  return `${text.slice(0, 1200)}... [已截断，长度=${text.length}]`
+  return `${text.slice(0, 1200)}... [truncated, length=${text.length}]`
 }
 
 export function normalizeLogMediaUrl(url: string): string {
@@ -240,33 +190,6 @@ export function formatLogProgressField(l: LogListItem): string {
   return Number.isFinite(progress) ? `${Math.max(0, Math.min(100, progress))}%` : "-"
 }
 
-/** Same as `static/manage.html` `getLogOperationLabel` */
-export function getLogOperationLabelZh(l: LogListItem): string {
-  const op = String(l.operation || "").trim()
-  if (op === "generate_image") return "图片"
-  if (op === "generate_video") return "视频"
-  return ""
-}
-
-/**
- * Outcome one-liner for the logs list — matches `static/manage.html` `formatLogOutcome`
- * and `formatLogOutcomeClass` for `className`
- */
-export function formatLogOutcomeZh(l: LogListItem): string {
-  const code = Number(l.status_code)
-  if (code === 200) {
-    const label = getLogOperationLabelZh(l)
-    return label ? `${label}结果已返回` : "已返回结果"
-  }
-  if (code === 102) return "处理中"
-  const err = extractLogErrorSummary(l, undefined)
-  if (err) {
-    return err.length > 96 ? `${err.slice(0, 93)}…` : err
-  }
-  if (code >= 400) return "请求失败"
-  return "-"
-}
-
 export function formatLogOutcomeRowClass(l: LogListItem): string {
   if ((l.status_code || 0) >= 400) return "text-red-600 dark:text-red-300"
   if (l.status_code === 200) return "text-green-700 dark:text-emerald-300"
@@ -274,14 +197,14 @@ export function formatLogOutcomeRowClass(l: LogListItem): string {
   return "text-muted-foreground"
 }
 
-/** Pills in the 状态 column — `static/manage.html` `formatLogStatusClass` */
+/** Pills in the status column (aligned with `formatLogStatus` from requestLogUi). */
 export function logStatusPillClass(l: LogListItem): string {
-  const s = formatLogStatusZh(l)
-  if (s === "处理中")
+  const s = formatLogStatus(l)
+  if (s === "Processing")
     return "bg-amber-50 text-amber-700 dark:bg-amber-950/50 dark:text-amber-200"
-  if (s === "已完成")
+  if (s === "Completed")
     return "bg-green-50 text-green-700 dark:bg-emerald-950/50 dark:text-emerald-200"
-  if (s === "失败") return "bg-red-50 text-red-700 dark:bg-red-950/40 dark:text-red-200"
+  if (s === "Failed") return "bg-red-50 text-red-700 dark:bg-red-950/40 dark:text-red-200"
   return "bg-gray-100 text-gray-700 dark:bg-muted/80 dark:text-foreground/90"
 }
 

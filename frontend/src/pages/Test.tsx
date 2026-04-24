@@ -68,7 +68,7 @@ export default function TestPage() {
   const [baseUrl, setBaseUrl] = useState("")
   const [apiKey, setApiKey] = useState("")
   const [prompt, setPrompt] = useState(
-    "一只可爱的橘猫趴在窗台上晒太阳，窗外是樱花盛开的春天"
+    "A cute orange cat napping on a windowsill in the sun, cherry blossoms outside in spring."
   )
   const [models, setModels] = useState<Record<string, string>>({})
   const [selectedModel, setSelectedModel] = useState<string | null>(null)
@@ -209,9 +209,11 @@ export default function TestPage() {
     const messages = [{ role: "user", content: contentArr.length === 1 ? prompt : contentArr }]
     const body = { model: selectedModel, messages, stream: true }
 
-    appendLog(`[${new Date().toLocaleTimeString()}] Model: ${selectedModel}\n`)
-    appendLog(`[${new Date().toLocaleTimeString()}] Prompt: ${prompt.substring(0, 100)}${prompt.length > 100 ? "..." : ""}\n`)
-    appendLog(`[${new Date().toLocaleTimeString()}] Starting request...\n`)
+    const logTimeOpts = { hour: "2-digit" as const, minute: "2-digit" as const, second: "2-digit" as const, hour12: false }
+    const logTime = new Date().toLocaleTimeString("en-US", logTimeOpts)
+    appendLog(`[${logTime}] Model: ${selectedModel}\n`)
+    appendLog(`[${logTime}] Prompt: ${prompt.substring(0, 100)}${prompt.length > 100 ? "..." : ""}\n`)
+    appendLog(`[${logTime}] Starting request...\n`)
 
     try {
       const resp = await fetch(`${baseUrl.trim()}/v1/chat/completions`, {
@@ -267,7 +269,9 @@ export default function TestPage() {
       }
 
       const elapsed = ((Date.now() - startTime) / 1000).toFixed(1)
-      appendLog(`\n\n[${new Date().toLocaleTimeString()}] Done in ${elapsed}s\n`)
+      appendLog(
+        `\n\n[${new Date().toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false })}] Done in ${elapsed}s\n`
+      )
       renderResult(fullContent)
       setStatus("done")
       setTimeElapsed(Number(elapsed))
