@@ -28,16 +28,35 @@ def _normalize_host(host: str) -> str:
 
 
 def _api_only_hostnames() -> set[str]:
+    # Env wins over config so CI/containers can override without editing setting.toml
     raw = (os.environ.get("FLOW2API_API_ONLY_HOST") or "").strip()
+    if not raw:
+        try:
+            raw = (getattr(config, "api_only_host", None) or "").strip()
+        except Exception:
+            raw = ""
     if not raw:
         return set()
     return {_normalize_host(h) for h in raw.split(",") if h.strip()}
 
 
 def _incoming_hostname(request: Request) -> str:
+    # RFC 7239 Forwarded (some proxies; Cloudflare may use X-Forwarded-Host only)
+    fwd = (request.headers.get("forwarded") or "")
+    if fwd:
+        for segment in fwd.split(","):
+            for token in segment.split(";"):
+                t = token.strip()
+                if t.lower().startswith("host="):
+                    v = t.split("=", 1)[-1].strip().strip('"')
+                    if v:
+                        return _normalize_host(v)
     xf = (request.headers.get("x-forwarded-host") or "").strip()
     if xf:
         return _normalize_host(xf.split(",")[0].strip())
+    cdn = (request.headers.get("x-cdn-request-host") or "").strip()  # rare
+    if cdn:
+        return _normalize_host(cdn)
     return _normalize_host(request.headers.get("host", ""))
 
 
