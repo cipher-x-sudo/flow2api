@@ -10,5 +10,6 @@ Reference material for HTTP endpoints and Pydantic models used by this project.
 | [generation-video.md](./generation-video.md) | Video model ids (t2v / i2v / r2v) |
 | [endpoints.md](./endpoints.md) | All API routes: public (OpenAI/Gemini), static, and admin/frontend |
 | [models.md](./models.md) | Request/response and domain models (`src/core/models.py` and admin request bodies) |
+| [agent-gateway.md](./agent-gateway.md) | Agent Gateway: Docker Compose, `remote_browser` URL toward gateway, WebSocket agents |
 
 For an interactive schema, run the server and open `/openapi.json` or `/docs` (unless the host is restricted by `FLOW2API_API_ONLY_HOST`; see `ApiOnlyHostMiddleware` in `src/main.py`).

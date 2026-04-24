@@ -1,0 +1,5 @@
+# Minimal deps for the standalone agent-gateway service (Docker image).
+fastapi==0.119.0
+uvicorn[standard]==0.32.1
+websockets==14.1
+pydantic==2.10.4
