@@ -38,6 +38,179 @@ Services (merge `docker-compose.yml` + `docker-compose.agent.yml`):
 | `remote_browser_api_key` | Same as **`GATEWAY_FLOW2API_BEARER`** |
 | `remote_browser_timeout` | ≤ `SOLVE_TIMEOUT_SECONDS` (default 120) |
 
+## Request and response payloads
+
+Flow2API calls the gateway with **`Authorization: Bearer <remote_browser_api_key>`** (same value as `GATEWAY_FLOW2API_BEARER`). Agents connect over WebSocket and do not use that header.
+
+### `GET /health` (no auth)
+
+**Response (200):**
+
+```json
+{ "ok": true, "service": "flow2api-agent-gateway" }
+```
+
+### `POST /api/v1/solve`
+
+**Request body (JSON):**
+
+| Field | Type | Required | Description |
+|--------|------|----------|-------------|
+| `project_id` | string | Yes | Google Flow / VideoFX project id for this account. |
+| `token_id` | integer | Yes | Flow2API database token id; the gateway routes the job to the agent that registered this id. |
+| `action` | string | No | Default `"IMAGE_GENERATION"`. Also used: e.g. `"VIDEO_GENERATION"`. |
+
+Example:
+
+```json
+{
+  "project_id": "b7c9f2a1-0000-0000-0000-000000000000",
+  "token_id": 42,
+  "action": "IMAGE_GENERATION"
+}
+```
+
+**Response (200, success):**
+
+| Field | Type | Description |
+|--------|------|-------------|
+| `token` | string | reCAPTCHA / solve token for upstream requests. |
+| `session_id` | string | Opaque id Flow2API treats as the remote browser session (passed back on finish/error). |
+| `fingerprint` | object (optional) | Browser fingerprint map; Flow2API may apply it to subsequent API calls. |
+
+```json
+{
+  "token": "<solve-token-string>",
+  "session_id": ";1730000000000",
+  "fingerprint": { }
+}
+```
+
+**Error responses (non-200):** FastAPI style — JSON with a `detail` string, for example:
+
+- **400** — missing `project_id` / `token_id`, or bad input.
+- **503** — no agent has registered for that `token_id`.
+- **504** — no `solve_result` / `solve_error` within `SOLVE_TIMEOUT_SECONDS`.
+- **500 / 502** — agent error, incomplete result, or internal failure.
+
+### `POST /api/v1/prefill`
+
+Optional warm-up hint (body shape matches what Flow2API sends; the MVP gateway only logs and returns ok).
+
+**Request body (JSON):**
+
+```json
+{
+  "project_id": "<string>",
+  "action": "IMAGE_GENERATION",
+  "token_id": 42
+}
+```
+
+`token_id` may be `null` or omitted depending on the caller.
+
+**Response (200):**
+
+```json
+{ "ok": true }
+```
+
+### `POST /api/v1/sessions/{session_id}/finish`
+
+Notifies the remote service that the captcha session completed successfully. `session_id` is URL-encoded when sent (from Flow2API: typically the `session_id` returned from `/api/v1/solve`).
+
+**Request body (JSON, as sent by Flow2API):**
+
+```json
+{ "status": "success" }
+```
+
+**Response (200):**
+
+```json
+{ "ok": true }
+```
+
+### `POST /api/v1/sessions/{session_id}/error`
+
+Reports an upstream error for that session.
+
+**Request body (JSON, as sent by Flow2API):**
+
+```json
+{ "error_reason": "human-readable reason" }
+```
+
+**Response (200):**
+
+```json
+{ "ok": true }
+```
+
+### WebSocket `GET /ws/agents` (PC agents; not Bearer auth)
+
+1. **Client → server (first text frame, JSON):** `register`
+
+```json
+{
+  "type": "register",
+  "device_token": "<GATEWAY_AGENT_DEVICE_TOKEN>",
+  "token_ids": [1, 2, 3]
+}
+```
+
+2. **Server → client (ack):**
+
+```json
+{ "type": "registered", "token_ids": [1, 2, 3] }
+```
+
+3. **Server → client (work):** `solve_job` (one per HTTP `/api/v1/solve` dispatched to this agent’s `token_id`).
+
+```json
+{
+  "type": "solve_job",
+  "job_id": "<uuid>",
+  "project_id": "<string>",
+  "action": "IMAGE_GENERATION",
+  "token_id": 42
+}
+```
+
+4. **Client → server (result):** reply with either:
+
+**Success:**
+
+```json
+{
+  "type": "solve_result",
+  "job_id": "<same as solve_job>",
+  "token": "<solve-token-string>",
+  "session_id": "<string>",
+  "fingerprint": { }
+}
+```
+
+`fingerprint` is optional; omit or use `{}` if none.
+
+**Failure:**
+
+```json
+{
+  "type": "solve_error",
+  "job_id": "<same as solve_job>",
+  "error": "short reason"
+}
+```
+
+5. **Server → client (protocol errors on later frames):** e.g. invalid JSON or unknown `type`:
+
+```json
+{ "type": "error", "detail": "..." }
+```
+
+Pydantic reference types: [`src/agent_gateway/schemas.py`](../src/agent_gateway/schemas.py).
+
 ## Environment variables (gateway)
 
 | Variable | Purpose |

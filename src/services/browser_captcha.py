@@ -677,23 +677,15 @@ class TokenBrowser:
         try:
             browser_args = [
                 '--disable-blink-features=AutomationControlled',
-                '--disable-quic',
-                '--disable-features=UseDnsHttpsSvcb',
+                 '--disable-gpu',
                 '--no-sandbox',
                 '--disable-dev-shm-usage',
-                '--disable-setuid-sandbox',
-                '--no-first-run',
                 '--no-zygote',
                 f'--window-size={width},{height}',
                 '--disable-infobars',
-                '--hide-scrollbars',
-                '--profile-directory=Default',
-                '--disable-extensions',
                 '--disable-background-networking',
                 '--disable-sync',
                 '--disable-translate',
-                '--disable-default-apps',
-                '--no-default-browser-check',
             ]
 
             if launch_in_background:

@@ -4,7 +4,7 @@ This document is for **end customers and integrators** using Flow2API as an Open
 
 - **Image model list:** [section 2](#2-image-model-ids-catalog). **Video model list:** [section 3](#3-video-model-ids-catalog). **Aliases** (image only): [§2.1](#21-alias-and-generationconfig-image-only).  
 - Per-field details (aspect ratio, image counts, video upscalers) are also in [generation-image.md](./generation-image.md) and [generation-video.md](./generation-video.md).  
-- **Request and response examples:** [section 4](#4-request-format-headers-and-json-payloads). Schemas: [models.md](./models.md) and [generation.md](./generation.md).
+- **Request and response examples:** [section 4](#4-request-format-headers-and-json-payloads) (including **§4.4** full response JSON for **image and video** generation, OpenAI and Gemini). Schemas: [models.md](./models.md) and [generation.md](./generation.md).
 
 ## Table of contents
 
@@ -12,7 +12,7 @@ This document is for **end customers and integrators** using Flow2API as an Open
 2. [Image model IDs (catalog)](#2-image-model-ids-catalog)  
    - [2.1 Alias and `generationConfig` (image only)](#21-alias-and-generationconfig-image-only)
 3. [Video model IDs (catalog)](#3-video-model-ids-catalog) (subsections: t2v, i2v, r2v)
-4. [Request format, headers, and JSON payloads](#4-request-format-headers-and-json-payloads) (subsections: 4.1–4.4 — headers, OpenAI, Gemini, responses)
+4. [Request format, headers, and JSON payloads](#4-request-format-headers-and-json-payloads) (subsections: 4.1–4.4 — headers, OpenAI, Gemini, **response payloads**)
 5. [What you do as a client](#5-what-you-do-as-a-client)
 6. [What happens inside the service (job handling)](#6-what-happens-inside-the-service-job-handling)
 7. [Video upscaling (4K and 1080p models)](#7-video-upscaling-4k-and-1080p-models)
@@ -389,18 +389,174 @@ Use `POST` to the same path with `:streamGenerateContent` and an identical JSON 
 
 ---
 
-### 4.4 Successful response shapes (short)
+### 4.4 Response payloads (generation) — image and video
 
-**OpenAI `chat.completions` (non-stream):** JSON with `choices[0].message.content` as a string.
+The gateway adds a top-level **`url`** on success when it can parse a direct media link from the assistant message (same string as in the markdown / HTML), so clients can use **`url`** without parsing `content`.
 
-- **Image:** the string is usually **markdown** with an embedded image, e.g. `![...](https://...)` pointing at the generated asset (or cache URL). A top-level **`url`** may duplicate the same link.
-- **Video:** the string often includes an HTML `<video src="...">` snippet (e.g. inside markdown) for players; a top-level **`url`** may also be set.
+#### OpenAI style — `POST /v1/chat/completions` (non-stream)
 
-**Stream:** lines starting with `data: `, each a JSON `chat.completion.chunk` with `choices[0].delta` (`reasoning_content` for progress text, `content` for the final media markup or markdown). The stream ends with `data: [DONE]`.
+**HTTP 200, image** — `choices[0].message.content` is markdown; `model` in the response is the gateway label (`flow2api`), not your request’s model id.
 
-**Gemini `generateContent` (non-stream):** JSON with `candidates[0].content.parts[]` (images as inline or links; video as `fileData` / `text` with links). On error, Gemini-shaped error JSON with HTTP 4xx/5xx.
+```json
+{
+  "id": "chatcmpl-1730000000",
+  "object": "chat.completion",
+  "created": 1730000000,
+  "model": "flow2api",
+  "url": "https://example.com/tmp/abc123.png",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "![Generated Image](https://example.com/tmp/abc123.png)"
+      },
+      "finish_reason": "stop"
+    }
+  ]
+}
+```
 
-**Errors (both styles):** OpenAI-style responses may use a top-level `error: { "message", "type", "code", "status_code" }` JSON body; HTTP status can be 4xx/5xx. For Gemini-style routes, errors are returned as JSON with an `error` object and an appropriate status code. Your client should read the body on failure, not only the status line.
+**HTTP 200, video** — content wraps a `<video>` tag in a markdown HTML fence; **`url`** is still the playable link.
+
+```json
+{
+  "id": "chatcmpl-1730000000",
+  "object": "chat.completion",
+  "created": 1730000000,
+  "model": "flow2api",
+  "url": "https://example.com/tmp/clip456.mp4",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "```html\n<video src='https://example.com/tmp/clip456.mp4' controls></video>\n```"
+      },
+      "finish_reason": "stop"
+    }
+  ]
+}
+```
+
+#### OpenAI style — `POST /v1/chat/completions` (stream, SSE)
+
+Each line is `data: ` + JSON, except the terminator. **Progress** updates use `choices[0].delta.reasoning_content` (human-readable status in the gateway locale). The **last** media chunk uses `delta.content` and `finish_reason: "stop"` (no `reasoning_content` on that chunk).
+
+**Mid-run (example progress):**
+
+```text
+data: {"id":"chatcmpl-1730000000","object":"chat.completion.chunk","created":1730000000,"model":"flow2api","choices":[{"index":0,"delta":{"reasoning_content":"视频生成中...\n\n"},"finish_reason":null}]}
+
+```
+
+**Final image (example):**
+
+```text
+data: {"id":"chatcmpl-1730000000","object":"chat.completion.chunk","created":1730000000,"model":"flow2api","choices":[{"index":0,"delta":{"content":"![Generated Image](https://example.com/tmp/abc123.png)"},"finish_reason":"stop"}]}
+
+```
+
+**Final video (example):** the final `content` is raw HTML (not the fenced block used in non-stream).
+
+```text
+data: {"id":"chatcmpl-1730000000","object":"chat.completion.chunk","created":1730000000,"model":"flow2api","choices":[{"index":0,"delta":{"content":"<video src='https://example.com/tmp/clip456.mp4' controls style='max-width:100%'></video>"},"finish_reason":"stop"}]}
+
+```
+
+**End of stream:**
+
+```text
+data: [DONE]
+
+```
+
+**HTTP error during stream** — a `data: ` line may contain a JSON object with a top-level **`error`** (same shape as non-stream below) instead of a normal chunk; then the stream may end.
+
+#### OpenAI error shape (non-stream or final JSON)
+
+```json
+{
+  "error": {
+    "message": "Human-readable reason",
+    "type": "server_error",
+    "code": "generation_failed",
+    "status_code": 502
+  }
+}
+```
+
+`type` is often `invalid_request_error` for 4xx-style failures. The HTTP status line matches `status_code` when the gateway sets it.
+
+#### Gemini style — `POST .../models/{model}:generateContent` (non-stream, HTTP 200)
+
+The body is **Gemini-shaped**: `candidates[0].content.parts[]` is derived from the same internal assistant string OpenAI mode uses. **Images** usually appear as `inlineData` (base64) after the gateway fetches the URL, or as `fileData` + `fileUri` when inlining is not used. **Video** is typically one `fileData` part with the video URL.
+
+**Image (illustrative — parts may use `inlineData` or `fileData` depending on cache/upstream):**
+
+```json
+{
+  "candidates": [
+    {
+      "content": {
+        "role": "model",
+        "parts": [
+          {
+            "inlineData": {
+              "mimeType": "image/png",
+              "data": "iVBORw0KGgo..."
+            }
+          }
+        ]
+      },
+      "finishReason": "STOP",
+      "index": 0
+    }
+  ],
+  "modelVersion": "gemini-3.0-pro-image-landscape"
+}
+```
+
+**Video (typical `fileData` part):**
+
+```json
+{
+  "candidates": [
+    {
+      "content": {
+        "role": "model",
+        "parts": [
+          {
+            "fileData": {
+              "mimeType": "video/mp4",
+              "fileUri": "https://example.com/tmp/clip456.mp4"
+            }
+          }
+        ]
+      },
+      "finishReason": "STOP",
+      "index": 0
+    }
+  ],
+  "modelVersion": "veo_3_1_t2v_fast_landscape"
+}
+```
+
+`modelVersion` is the **`{model}`** you used in the path. Multi-paragraph **progress** text in streaming can become **multiple** `text` parts in a single candidate when using Gemini stream conversion.
+
+#### Gemini error shape (HTTP 4xx/5xx)
+
+```json
+{
+  "error": {
+    "code": 502,
+    "message": "Human-readable reason",
+    "status": "UNKNOWN"
+  }
+}
+```
+
+`status` follows the gateway’s Gemini compatibility map. Always read the JSON **body** on failure, not only the HTTP code.
 
 ---
 
