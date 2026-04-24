@@ -1,0 +1,14 @@
+# Build Flow2API from this repo so the container includes your current frontend (npm run build → /app/static).
+# The default docker-compose.yml only pulls ghcr.io/...:latest — that image can lag behind your git UI.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.local-build.yml build --no-cache flow2api
+#   docker compose -f docker-compose.yml -f docker-compose.local-build.yml up -d
+#
+# With agent-gateway + tunnel, add the other -f files as usual.
+
+services:
+  flow2api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: flow2api:local
