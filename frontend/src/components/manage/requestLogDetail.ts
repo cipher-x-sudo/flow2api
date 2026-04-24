@@ -141,6 +141,46 @@ export function extractLogSuccessSummary(log: LogListItem | null | undefined, re
   return o.status === "success" ? "生成成功" : "生成成功，已返回结果"
 }
 
+/** English copy for the light “Log details” template (list/detail UI). */
+export function extractLogSuccessSummaryEn(
+  log: LogListItem | null | undefined,
+  responseBodyObj: unknown
+): string {
+  if (Number(log?.status_code) !== 200) return ""
+  if (!responseBodyObj || typeof responseBodyObj !== "object") {
+    return "Generation successful, results have been returned."
+  }
+  const o = responseBodyObj as Record<string, unknown>
+  const assets = o.generated_assets as Record<string, unknown> | undefined
+  if (assets && typeof assets === "object" && assets.upscaled_image && typeof assets.upscaled_image === "object") {
+    const up = assets.upscaled_image as { resolution?: string }
+    const res = up.resolution || "high-resolution"
+    return `Generation successful, ${res} result returned.`
+  }
+  const directUrl = extractLogPrimaryUrl(responseBodyObj)
+  if (directUrl) {
+    if (isVideoUrl(directUrl)) return "Generation successful, video results returned."
+    if (isImageUrl(directUrl)) return "Generation successful, image results returned."
+    return "Generation successful, a result URL was returned."
+  }
+  return o.status === "success" ? "Generation successful." : "Generation successful, results have been returned."
+}
+
+/** e.g. `2026/4/22 12:04:53` for the Basic information / Time field */
+export function formatLogDetailLocalTimestamp(iso: string | null | undefined): string {
+  if (!iso) return "—"
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return "—"
+  return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}:${String(d.getSeconds()).padStart(2, "0")}`
+}
+
+/** Light modal status-code badge (no dark: variants) */
+export function statusCodePillClassLight(code: number | null | undefined): string {
+  if (code === 200) return "bg-emerald-50 text-emerald-800"
+  if (code === 102) return "bg-amber-50 text-amber-800"
+  return "bg-red-50 text-red-800"
+}
+
 export function formatLogPayload(raw: string | null | undefined): string {
   const parsed = parseLogJson(raw)
   if (parsed) {
@@ -195,7 +235,7 @@ export function isImageUrl(url: string): boolean {
 
 /** Matches static `formatLogProgress` */
 export function formatLogProgressField(l: LogListItem): string {
-  if (l.progress === null || l.progress === undefined) return "-"
+  if (l.progress === null || l.progress === undefined || l.progress === "") return "-"
   const progress = Number(l.progress)
   return Number.isFinite(progress) ? `${Math.max(0, Math.min(100, progress))}%` : "-"
 }

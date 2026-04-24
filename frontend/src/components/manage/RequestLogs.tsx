@@ -206,19 +206,23 @@ export function RequestLogs() {
       </CardContent>
 
       <Dialog open={detailOpen} onOpenChange={setDetailOpen}>
-        <DialogContent className="flex max-h-[80vh] w-[calc(100vw-2rem)] max-w-3xl translate-x-[-50%] translate-y-[-50%] flex-col gap-0 overflow-hidden p-0 sm:max-w-3xl">
-          <DialogHeader className="shrink-0 flex-row items-center justify-between space-y-0 border-b border-border p-5 text-left">
-            <DialogTitle className="text-lg font-semibold leading-none">日志详情</DialogTitle>
+        <DialogContent
+          className={cn(
+            "flex max-h-[80vh] w-[calc(100vw-2rem)] max-w-3xl translate-x-[-50%] translate-y-[-50%] flex-col gap-0 overflow-hidden p-0 sm:max-w-3xl sm:rounded-xl",
+            "border-slate-200/90 bg-white text-slate-900 shadow-2xl [color-scheme:light]",
+            "[&>button]:text-slate-400 [&>button]:hover:text-slate-800 [&>button]:hover:opacity-100"
+          )}
+        >
+          <DialogHeader className="shrink-0 flex-row items-center justify-between space-y-0 border-b border-slate-200/80 p-5 text-left pr-12">
+            <DialogTitle className="text-lg font-semibold leading-none tracking-tight text-slate-900">Log details</DialogTitle>
           </DialogHeader>
-          <div className="min-h-0 flex-1 overflow-y-auto p-5">
+          <div className="min-h-0 flex-1 overflow-y-auto bg-white p-5">
             {detailLoading ? (
-              <div className="rounded-md border border-border p-4 bg-muted/30 text-sm text-muted-foreground">
-                日志详情加载中…
-              </div>
+              <div className="rounded-lg border border-slate-200/90 bg-slate-50/80 p-4 text-sm text-slate-500">Loading log details…</div>
             ) : detail ? (
               <LogDetailStatic log={detail} />
             ) : (
-              <p className="py-8 text-center text-sm text-muted-foreground">无数据</p>
+              <p className="py-8 text-center text-sm text-slate-500">No data</p>
             )}
           </div>
         </DialogContent>
