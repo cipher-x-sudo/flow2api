@@ -72,18 +72,18 @@ class AgentRegistry:
         job_id = str(uuid.uuid4())
         loop = asyncio.get_event_loop()
         fut: asyncio.Future[dict[str, Any]] = loop.create_future()
-        p = PendingSolve(
-            job_id=job_id,
-            future=fut,
-            token_id=int(token_id) if token_id is not None else None,
-            project_id=project_id,
-            action=action,
-            agent_ws=ws,
-        )
         async with self._lock:
             ws = self._by_token.get(int(token_id))
             if ws is None:
                 raise LookupError("no_agent")
+            p = PendingSolve(
+                job_id=job_id,
+                future=fut,
+                token_id=int(token_id) if token_id is not None else None,
+                project_id=project_id,
+                action=action,
+                agent_ws=ws,
+            )
             self._pending[job_id] = p
 
         msg = {
