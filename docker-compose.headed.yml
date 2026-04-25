@@ -1,6 +1,7 @@
-# In-container headed browser (VNC optional). With Cloudflare Tunnel.
-#   docker compose -f docker-compose.headed.yml up -d
+# In-container headed browser (VNC optional) + agent gateway + Cloudflare Tunnel.
+#   docker compose -f docker-compose.headed.yml up -d --build
 # In Zero Trust, point admin-flow and flow-api hostnames to http://flow2api-headed:8000
+# Optional agent hostname can point to http://agent-gateway:9080 (for /ws/agents).
 
 services:
   flow2api-headed:
@@ -29,6 +30,27 @@ services:
     shm_size: ${SHM_SIZE:-2gb}
     restart: unless-stopped
 
+  agent-gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile.agent-gateway
+    container_name: agent-gateway
+    ports:
+      - "9080:9080"
+    environment:
+      - GATEWAY_FLOW2API_BEARER=${GATEWAY_FLOW2API_BEARER:-change-me-match-flow2api}
+      - GATEWAY_AGENT_DEVICE_TOKEN=${GATEWAY_AGENT_DEVICE_TOKEN:-change-me-device-secret}
+      - SOLVE_TIMEOUT_SECONDS=${SOLVE_TIMEOUT_SECONDS:-120}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
+    depends_on:
+      - redis
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: agent-gateway-redis
+    restart: unless-stopped
+
   cloudflared:
     image: cloudflare/cloudflared:latest
     container_name: flow2api-headed-cloudflared
@@ -37,4 +59,5 @@ services:
       TUNNEL_TOKEN: ${TUNNEL_TOKEN}
     depends_on:
       - flow2api-headed
+      - agent-gateway
     restart: unless-stopped
