@@ -9,6 +9,8 @@ import { toast } from "sonner"
 import { Loader2, CheckCircle2, XCircle, Copy } from "lucide-react"
 import { Link } from "react-router-dom"
 
+type GatewayAuthMode = "legacy" | "keygen" | "dual" | "unknown"
+
 function toWssBase(publicBase: string): string {
   const t = publicBase.trim()
   if (!t) return ""
@@ -29,18 +31,38 @@ export function AgentGateway() {
   const [captchaLoaded, setCaptchaLoaded] = useState(false)
   const [healthStatus, setHealthStatus] = useState<"idle" | "loading" | "ok" | "err">("idle")
   const [healthBody, setHealthBody] = useState<string>("")
+  const [gatewayMode, setGatewayMode] = useState<GatewayAuthMode>("unknown")
+  const [gatewayVerifyMode, setGatewayVerifyMode] = useState("")
+  const [gatewayReachable, setGatewayReachable] = useState<boolean | null>(null)
+  const [gatewayModeMsg, setGatewayModeMsg] = useState("")
 
   useEffect(() => {
     if (!token) return
     let cancelled = false
     ;(async () => {
-      const { ok, data } = await adminJson<Record<string, unknown>>("/api/captcha/config", token)
+      const [captchaResp, modeResp] = await Promise.all([
+        adminJson<Record<string, unknown>>("/api/captcha/config", token),
+        adminJson<Record<string, unknown>>("/api/agent-gateway/mode", token),
+      ])
       if (cancelled) return
-      if (ok && data) {
-        const m = data.captcha_method
+      if (captchaResp.ok && captchaResp.data) {
+        const m = captchaResp.data.captcha_method
         setCaptchaMethod(typeof m === "string" ? m : "")
-        const rb = data.remote_browser_base_url
+        const rb = captchaResp.data.remote_browser_base_url
         setRemoteBase(typeof rb === "string" ? rb : "")
+      }
+      if (modeResp.data) {
+        const mode = String(modeResp.data.agent_auth_mode || "unknown").toLowerCase()
+        const safeMode: GatewayAuthMode =
+          mode === "legacy" || mode === "keygen" || mode === "dual" ? mode : "unknown"
+        setGatewayMode(safeMode)
+        setGatewayVerifyMode(String(modeResp.data.keygen_verify_mode || ""))
+        if (typeof modeResp.data.gateway_reachable === "boolean") {
+          setGatewayReachable(modeResp.data.gateway_reachable)
+        } else {
+          setGatewayReachable(null)
+        }
+        setGatewayModeMsg(String(modeResp.data.message || ""))
       }
       setCaptchaLoaded(true)
     })()
@@ -53,6 +75,46 @@ export function AgentGateway() {
     const o = toWssBase(publicAgentUrl)
     return o ? `${o}/ws/agents` : ""
   }, [publicAgentUrl])
+
+  const registerJson = useMemo(() => {
+    if (gatewayMode === "keygen") {
+      return `{
+  "type": "register",
+  "agent_token": "<keygen-token>",
+  "token_ids": [1]
+}`
+    }
+    if (gatewayMode === "dual") {
+      return `{
+  "type": "register",
+  "agent_token": "<keygen-token>",
+  "token_ids": [1]
+}
+
+// Also accepted in dual mode:
+{
+  "type": "register",
+  "device_token": "<GATEWAY_AGENT_DEVICE_TOKEN>",
+  "token_ids": [1]
+}`
+    }
+    return `{
+  "type": "register",
+  "device_token": "<GATEWAY_AGENT_DEVICE_TOKEN>",
+  "token_ids": [1]
+}`
+  }, [gatewayMode])
+
+  const modeBadgeText = useMemo(() => {
+    if (gatewayMode === "unknown") return "Detected mode: unknown"
+    if (gatewayMode === "keygen" && gatewayVerifyMode) {
+      return `Detected mode: keygen (${gatewayVerifyMode})`
+    }
+    if (gatewayMode === "dual" && gatewayVerifyMode) {
+      return `Detected mode: dual (${gatewayVerifyMode})`
+    }
+    return `Detected mode: ${gatewayMode}`
+  }, [gatewayMode, gatewayVerifyMode])
 
   const copy = async (text: string) => {
     try {
@@ -148,6 +210,50 @@ export function AgentGateway() {
 
       <Card>
         <CardHeader>
+          <CardTitle>Gateway mode detection</CardTitle>
+          <CardDescription>
+            Auto-detected from configured gateway health endpoint.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-xs bg-muted px-2 py-1 rounded">{modeBadgeText}</span>
+            {gatewayReachable === true && <CheckCircle2 className="h-4 w-4 text-green-600" />}
+            {gatewayReachable === false && <XCircle className="h-4 w-4 text-destructive" />}
+          </div>
+          {gatewayModeMsg ? (
+            <p className="text-xs text-muted-foreground">{gatewayModeMsg}</p>
+          ) : null}
+          {gatewayMode === "keygen" ? (
+            <p className="text-xs text-muted-foreground">
+              Agent clients should send <code className="text-xs">agent_token</code>. Server must have
+              <code className="text-xs"> KEYGEN_*</code> configured.
+            </p>
+          ) : null}
+          {gatewayMode === "legacy" ? (
+            <p className="text-xs text-muted-foreground">
+              Agent clients should send <code className="text-xs">device_token</code> matching
+              <code className="text-xs"> GATEWAY_AGENT_DEVICE_TOKEN</code>.
+            </p>
+          ) : null}
+          {gatewayMode === "dual" ? (
+            <p className="text-xs text-muted-foreground">
+              Both auth payloads work. Prefer <code className="text-xs">agent_token</code> for forward compatibility.
+            </p>
+          ) : null}
+          {gatewayReachable === false ? (
+            <div className="text-xs text-amber-800 dark:text-amber-200 bg-amber-50 dark:bg-amber-950/40 border border-amber-200/60 dark:border-amber-800/60 rounded-md px-3 py-2 space-y-1">
+              <p>Gateway is unreachable from Flow2API.</p>
+              <p>
+                Check <code className="text-xs">remote_browser_base_url</code>, Docker service name, and tunnel/hostname routing.
+              </p>
+            </div>
+          ) : null}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
           <CardTitle>PC agents → public URL</CardTitle>
           <CardDescription>
             The hostname you set in Cloudflare (e.g. <code className="text-xs">https://agents.example.com</code> →
@@ -200,32 +306,29 @@ export function AgentGateway() {
         <CardHeader>
           <CardTitle>Register message (first frame after connect)</CardTitle>
           <CardDescription>
-            <code className="text-xs">GATEWAY_AGENT_DEVICE_TOKEN</code> must match your server env.{" "}
             <code className="text-xs">token_ids</code> are Flow2API token row IDs to serve.
           </CardDescription>
         </CardHeader>
         <CardContent>
           <pre className="text-xs bg-muted p-3 rounded-md overflow-x-auto">
-            {`{
-  "type": "register",
-  "device_token": "<GATEWAY_AGENT_DEVICE_TOKEN>",
-  "token_ids": [1]
-}`}
+            {registerJson}
           </pre>
+          {gatewayMode === "keygen" ? (
+            <p className="text-xs text-muted-foreground mt-2">
+              Keygen mode mismatch tip: if you send <code className="text-xs">device_token</code>, registration will fail.
+            </p>
+          ) : null}
+          {gatewayMode === "legacy" ? (
+            <p className="text-xs text-muted-foreground mt-2">
+              Legacy mode mismatch tip: if you send <code className="text-xs">agent_token</code>, registration will fail.
+            </p>
+          ) : null}
           <Button
             type="button"
             variant="outline"
             size="sm"
             className="mt-2"
-            onClick={() =>
-              copy(
-                `{
-  "type": "register",
-  "device_token": "<GATEWAY_AGENT_DEVICE_TOKEN>",
-  "token_ids": [1]
-}`
-              )
-            }
+            onClick={() => copy(registerJson)}
           >
             <Copy className="h-3.5 w-3.5 mr-1" />
             Copy JSON

@@ -163,3 +163,65 @@ curl -sS -X POST "https://<agents-host>/api/v1/solve" \
   -H "Content-Type: application/json" \
   -d '{"project_id":"test","token_id":2,"action":"IMAGE_GENERATION"}'
 ```
+
+## 10) User-side fallback example (headed server -> PC agent)
+
+This is the practical behavior many users want:
+
+- Flow2API runs with `captcha_method=browser` (server-side headed Playwright).
+- `browser_fallback_to_remote_browser=true`.
+- A PC agent is online and registered to gateway for the same `token_id`.
+
+When server-side headed captcha fails, the same user can still solve via their own PC agent through gateway.
+
+### Required settings
+
+In **System Settings -> Captcha**:
+
+- `captcha_method = browser`
+- `browser_fallback_to_remote_browser = true`
+- `remote_browser_base_url = http://agent-gateway:9080` (Docker internal)
+- `remote_browser_api_key = <same as GATEWAY_FLOW2API_BEARER>`
+
+On PC agent:
+
+- Connect to `wss://<agents-host>/ws/agents`
+- Register with matching `token_ids` that should serve jobs
+
+### End-to-end flow
+
+1. User sends a generation request to Flow2API.
+2. Flow2API first tries headed browser captcha on the server/container (not on the user's PC).
+3. Server-side headed solve fails (browser crash, timeout, missing dependency, reCAPTCHA evaluation/execute failure, etc.).
+4. Flow2API fallback logic calls gateway `POST /api/v1/solve`.
+5. Gateway dispatches `solve_job` to connected PC agent.
+6. PC agent solves reCAPTCHA in its browser and sends `solve_result`.
+7. Gateway returns token/session back to Flow2API.
+8. Original generation request continues successfully.
+
+### What the user should observe
+
+- The API call may be slightly slower during fallback, but it should still complete.
+- Logs should show browser fallback and then remote solve success.
+- If no PC agent is online for that `token_id`, fallback fails and request returns captcha error.
+
+### Example scenario
+
+Assume:
+
+- `token_id = 2`
+- Server-side headed browser (inside Flow2API host/container) fails due to local Chromium issue or reCAPTCHA evaluation failure
+- PC agent for `token_id=2` is online
+
+Result:
+
+- Instead of immediate request failure, gateway sends a `solve_job` to the PC.
+- PC returns `solve_result` with token.
+- Flow2API uses that token and continues generation.
+
+### Disable behavior
+
+Set `browser_fallback_to_remote_browser=false` if you want strict local-only browser behavior:
+
+- server headed captcha fails -> request fails immediately
+- no gateway fallback attempt

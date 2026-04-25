@@ -446,6 +446,40 @@ async def _score_test_with_remote_browser_service(
     return response_payload
 
 
+async def _probe_agent_gateway_mode(base_url: str) -> Dict[str, Any]:
+    normalized = _normalize_http_base_url(base_url)
+    health_url = f"{normalized}/health"
+    status_code, response_payload, response_text = await _sync_json_http_request(
+        method="GET",
+        url=health_url,
+        headers={},
+        payload=None,
+        timeout=8,
+    )
+    if status_code >= 400:
+        detail = ""
+        if isinstance(response_payload, dict):
+            detail = str(
+                response_payload.get("detail")
+                or response_payload.get("message")
+                or ""
+            ).strip()
+        if not detail:
+            detail = (response_text or "").strip()
+        raise RuntimeError(f"HTTP {status_code}{f': {detail}' if detail else ''}")
+
+    if not isinstance(response_payload, dict):
+        raise RuntimeError("health 返回格式错误")
+
+    return {
+        "ok": bool(response_payload.get("ok")),
+        "service": str(response_payload.get("service") or ""),
+        "agent_auth_mode": str(response_payload.get("auth_mode") or "").strip().lower(),
+        "keygen_verify_mode": str(response_payload.get("verify_mode") or "").strip().lower(),
+        "health_body": response_payload,
+    }
+
+
 def set_dependencies(tm: TokenManager, pm: ProxyManager, database: Database, cm: Optional[ConcurrencyManager] = None):
     """Set service instances"""
     global token_manager, proxy_manager, db, concurrency_manager
@@ -1780,6 +1814,48 @@ async def get_captcha_config(token: str = Depends(verify_admin_token)):
             (getattr(captcha_config, "browser_captcha_page_url", None) or "").strip()
             or "https://labs.google/fx/api/auth/providers"
         ),
+    }
+
+
+@router.get("/api/agent-gateway/mode")
+async def get_agent_gateway_mode(token: str = Depends(verify_admin_token)):
+    """Probe configured agent-gateway mode via remote_browser_base_url health."""
+    captcha_config = await db.get_captcha_config()
+    base_url = (getattr(captcha_config, "remote_browser_base_url", "") or "").strip()
+    if not base_url:
+        return {
+            "success": False,
+            "status": "not_configured",
+            "message": "remote_browser_base_url is not configured",
+            "agent_auth_mode": "unknown",
+            "keygen_verify_mode": "",
+            "gateway_reachable": False,
+            "base_url": "",
+        }
+    try:
+        probe = await _probe_agent_gateway_mode(base_url)
+    except Exception as e:
+        return {
+            "success": False,
+            "status": "unreachable",
+            "message": f"agent-gateway health probe failed: {e}",
+            "agent_auth_mode": "unknown",
+            "keygen_verify_mode": "",
+            "gateway_reachable": False,
+            "base_url": base_url,
+        }
+
+    mode = probe.get("agent_auth_mode") or "legacy"
+    verify_mode = probe.get("keygen_verify_mode") or ""
+    return {
+        "success": True,
+        "status": "reachable",
+        "message": "agent-gateway reachable",
+        "agent_auth_mode": mode,
+        "keygen_verify_mode": verify_mode,
+        "gateway_reachable": bool(probe.get("ok")),
+        "base_url": base_url,
+        "service": probe.get("service") or "",
     }
 
 

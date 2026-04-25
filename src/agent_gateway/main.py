@@ -60,7 +60,14 @@ app.include_router(ws_router, tags=["agents"])
 
 @app.get("/health")
 def health() -> dict:
-    return {"ok": True, "service": "flow2api-agent-gateway"}
+    s = load_settings()
+    verify_mode = s.keygen_verify_mode if s.agent_auth_mode in {"keygen", "dual"} else ""
+    return {
+        "ok": True,
+        "service": "flow2api-agent-gateway",
+        "auth_mode": s.agent_auth_mode,
+        "verify_mode": verify_mode,
+    }
 
 
 def run() -> None:
