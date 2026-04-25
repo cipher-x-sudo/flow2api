@@ -986,6 +986,9 @@ class Database:
                 )
             """)
 
+            # Existing DBs: tables were created before api_key_id; CREATE IF NOT EXISTS does not add columns.
+            await self._ensure_api_key_ownership_columns(db)
+
             # Create indexes
             await db.execute("CREATE INDEX IF NOT EXISTS idx_task_id ON tasks(task_id)")
             await db.execute("CREATE INDEX IF NOT EXISTS idx_token_st ON tokens(st)")
@@ -1011,6 +1014,25 @@ class Database:
             await db.execute("CREATE INDEX IF NOT EXISTS idx_token_stats_token_id ON token_stats(token_id)")
 
             await db.commit()
+
+    async def _ensure_api_key_ownership_columns(self, db):
+        """Add api_key_id to core tables when upgrading from older schemas (before indexes on those columns)."""
+        try:
+            if await self._table_exists(db, "projects"):
+                if not await self._column_exists(db, "projects", "api_key_id"):
+                    await db.execute("ALTER TABLE projects ADD COLUMN api_key_id INTEGER")
+                    print("  ✓ Added column 'api_key_id' to projects (init_db upgrade)")
+            if await self._table_exists(db, "tasks"):
+                if not await self._column_exists(db, "tasks", "api_key_id"):
+                    await db.execute("ALTER TABLE tasks ADD COLUMN api_key_id INTEGER")
+                    print("  ✓ Added column 'api_key_id' to tasks (init_db upgrade)")
+            if await self._table_exists(db, "request_logs"):
+                if not await self._column_exists(db, "request_logs", "api_key_id"):
+                    await db.execute("ALTER TABLE request_logs ADD COLUMN api_key_id INTEGER")
+                    print("  ✓ Added column 'api_key_id' to request_logs (init_db upgrade)")
+        except Exception as e:
+            print(f"  ✗ api_key_id column upgrade failed: {e}")
+            raise
 
     async def _migrate_request_logs(self, db):
         """Migrate request_logs table from old schema to new schema"""
