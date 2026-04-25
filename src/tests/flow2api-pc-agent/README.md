@@ -37,6 +37,7 @@ Notes:
 
 - In gateway `keygen` mode, only the token value (`key`) is used for auth verification.
 - In gateway `keygen + introspection` mode, provide both token value and `AGENT_TOKEN_ID` (or `licenseTokenId` in JSON payload).
+- This client now maps `licenseToken/licenseTokenId` to gateway register fields `agent_token/agent_token_id` automatically.
 - `licenseId` / `machineId` are not used by this client for auth; they may still be useful in your own app logic/logs.
 - Do not send only `licenseId` or only `machineId` as `AGENT_TOKEN` — that will fail auth.
 
@@ -69,6 +70,7 @@ npm start
 |------------------------|----------------|--------|
 | `wss` | `AGENT_GATEWAY_WSS` | Public WebSocket URL |
 | `agentToken` | `AGENT_TOKEN` | Keygen-derived agent credential sent in `register.agent_token` |
+| `agentTokenId` | `AGENT_TOKEN_ID` | Keygen token resource id sent in `register.agent_token_id` |
 | `agentId` | `AGENT_ID` | Optional machine/license hint for logs/debug |
 | `tokenIds` | `AGENT_TOKEN_IDS` (e.g. `1` or `1,2`) | Flow2API token **row ids** (admin) this PC serves |
 | `userDataDir` | — | Chromium profile; log in to Google/Flow on first run if needed |

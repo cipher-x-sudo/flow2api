@@ -54,10 +54,10 @@ async def _resolve_identity(data: dict[str, Any], s) -> AgentIdentity:
         return AgentIdentity(auth_method="legacy", subject="legacy-shared-token")
     if s.agent_auth_mode == "legacy":
         raise PermissionError("legacy mode requires device_token")
-    agent_token = str(data.get("agent_token") or "").strip()
+    agent_token = str(data.get("agent_token") or data.get("license_token") or "").strip()
     if not agent_token:
         raise PermissionError("agent_token required")
-    agent_token_id = str(data.get("agent_token_id") or "").strip()
+    agent_token_id = str(data.get("agent_token_id") or data.get("license_token_id") or "").strip()
     identity = await verify_agent_token(agent_token, agent_token_id, s)
     return AgentIdentity(
         auth_method="keygen",

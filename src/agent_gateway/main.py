@@ -19,9 +19,27 @@ logging.basicConfig(
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     s = load_settings()
+    min_bearer_len = 16
     if not s.flow2api_bearer:
-        logging.getLogger(__name__).warning(
+        logging.getLogger(__name__).error(
             "GATEWAY_FLOW2API_BEARER is empty — set to match Flow2API remote_browser_api_key"
+        )
+        raise RuntimeError("GATEWAY_FLOW2API_BEARER must be set")
+    if len(s.flow2api_bearer) < min_bearer_len:
+        logging.getLogger(__name__).error(
+            "GATEWAY_FLOW2API_BEARER is too short (<%s chars). Use a high-entropy secret.",
+            min_bearer_len,
+        )
+        raise RuntimeError("GATEWAY_FLOW2API_BEARER is too short")
+    if s.flow2api_bearer_previous and len(s.flow2api_bearer_previous) < min_bearer_len:
+        logging.getLogger(__name__).error(
+            "GATEWAY_FLOW2API_BEARER_PREVIOUS is too short (<%s chars).",
+            min_bearer_len,
+        )
+        raise RuntimeError("GATEWAY_FLOW2API_BEARER_PREVIOUS is too short")
+    if s.flow2api_bearer_previous:
+        logging.getLogger(__name__).info(
+            "flow2api bearer rotation window enabled (current+previous accepted)"
         )
     if s.agent_auth_mode in {"legacy", "dual"} and not s.agent_device_token:
         logging.getLogger(__name__).warning(

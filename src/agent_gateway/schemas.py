@@ -6,7 +6,7 @@ in a Dockerised DB or Redis in Phase 3.
 """
 from typing import Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, Field
 
 
 class WsRegister(BaseModel):
@@ -14,13 +14,25 @@ class WsRegister(BaseModel):
     # Legacy shared secret (legacy/dual mode).
     device_token: str = ""
     # Keygen-backed identity token (keygen/dual mode).
-    agent_token: str = ""
+    agent_token: str = Field(
+        default="",
+        validation_alias=AliasChoices("agent_token", "agentToken", "license_token", "licenseToken"),
+    )
     # Optional Keygen token resource id (UUID). Preferred for introspection lookup.
-    agent_token_id: str = ""
+    agent_token_id: str = Field(
+        default="",
+        validation_alias=AliasChoices("agent_token_id", "agentTokenId", "license_token_id", "licenseTokenId"),
+    )
+    # Compatibility aliases (kept for client payload clarity in logs/docs).
+    license_token: str = Field(default="", validation_alias=AliasChoices("license_token", "licenseToken"))
+    license_token_id: str = Field(
+        default="",
+        validation_alias=AliasChoices("license_token_id", "licenseTokenId"),
+    )
     # Optional machine or license identifier (for introspection fallback / debugging).
     agent_id: str = ""
     # Client-side hint only; server should intersect against authorized ownership map.
-    token_ids: list[int] = Field(default_factory=list)
+    token_ids: list[int] = Field(default_factory=list, validation_alias=AliasChoices("token_ids", "tokenIds"))
 
 
 class AgentIdentity(BaseModel):

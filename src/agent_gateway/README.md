@@ -12,6 +12,7 @@ FastAPI service that implements the same **HTTP** contract as Flow2API’s `remo
 
 ```bash
 export GATEWAY_FLOW2API_BEARER=your-secret   # must match Flow2API remote_browser_api_key
+export GATEWAY_FLOW2API_BEARER_PREVIOUS=old-secret   # optional during rotation window
 export GATEWAY_AGENT_AUTH_MODE=legacy         # legacy | keygen | dual
 export GATEWAY_AGENT_DEVICE_TOKEN=agent-secret
 python -m src.agent_gateway
@@ -51,3 +52,8 @@ Set `GATEWAY_AGENT_AUTH_MODE=keygen` (or `dual` during migration) and configure:
 - `AGENT_TOKEN_OWNERSHIP_JSON` map, e.g. `{"machine-1":[1,2],"license-abc":[3]}`
 
 In Keygen mode, each agent sends `agent_token` and receives only `authorized_token_ids` in `registered`.
+
+Auth boundary reminder:
+
+- Keygen secures WS agent identity (`/ws/agents`).
+- HTTP `/api/v1/*` is still protected by `GATEWAY_FLOW2API_BEARER`.

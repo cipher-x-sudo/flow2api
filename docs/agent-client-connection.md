@@ -16,6 +16,11 @@ Gateway supports `GATEWAY_AGENT_AUTH_MODE`:
 - `keygen`: requires `agent_token` (and in introspection mode also `agent_token_id`)
 - `dual`: accepts either (migration mode)
 
+Important trust boundary:
+
+- Keygen secures WebSocket agent identity only.
+- Gateway HTTP `/api/v1/*` still requires backend bearer (`GATEWAY_FLOW2API_BEARER`).
+
 Configure in gateway env:
 
 - `GATEWAY_AGENT_AUTH_MODE=legacy|keygen|dual`
@@ -46,6 +51,11 @@ The first message after WebSocket connect must be JSON with `type: "register"`.
   "token_ids": [1, 2, 3]
 }
 ```
+
+Compatibility aliases accepted by gateway:
+
+- `license_token` / `licenseToken` -> `agent_token`
+- `license_token_id` / `licenseTokenId` -> `agent_token_id`
 
 Notes:
 

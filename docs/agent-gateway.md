@@ -62,6 +62,12 @@ reCAPTCHA rejection (`PUBLIC_ERROR_UNUSUAL_ACTIVITY` / `reCAPTCHA evaluation fai
 
 Flow2API calls the gateway with **`Authorization: Bearer <remote_browser_api_key>`** (same value as `GATEWAY_FLOW2API_BEARER`). Agents connect over WebSocket and do not use that header.
 
+Auth boundary reminder:
+
+- `GATEWAY_FLOW2API_BEARER` protects **backend -> gateway HTTP** routes (`/api/v1/solve`, `/api/v1/prefill`, session callbacks).
+- Keygen (`agent_token` + `agent_token_id`) protects **PC agent -> gateway WebSocket** identity.
+- Keygen does not replace backend bearer; both layers are required.
+
 For a dedicated PC-agent integration walkthrough, see: [agent-client-connection.md](./agent-client-connection.md).
 
 ### `GET /health` (no auth)
@@ -258,6 +264,7 @@ Pydantic reference types: [`src/agent_gateway/schemas.py`](../src/agent_gateway/
 | Variable | Purpose |
 |----------|---------|
 | `GATEWAY_FLOW2API_BEARER` | Must match Flow2API `remote_browser_api_key`. |
+| `GATEWAY_FLOW2API_BEARER_PREVIOUS` | Optional previous bearer accepted during rotation window. |
 | `GATEWAY_AGENT_DEVICE_TOKEN` | Legacy shared secret (`legacy`/`dual` mode) for WebSocket register. |
 | `GATEWAY_AGENT_AUTH_MODE` | `legacy` (default), `keygen`, or `dual`. |
 | `KEYGEN_VERIFY_MODE` | `jwt` or `introspection`. |

@@ -7,6 +7,8 @@ from typing import Literal
 class Settings:
     # Flow2API remote_browser_api_key must match (Bearer)
     flow2api_bearer: str
+    # Previous bearer accepted during rotation window.
+    flow2api_bearer_previous: str
     # WebSocket agents send this in register
     agent_device_token: str
     agent_auth_mode: Literal["legacy", "keygen", "dual"]
@@ -43,6 +45,7 @@ def load_settings() -> Settings:
         leeway_seconds = max(0, int(raw_leeway))
     return Settings(
         flow2api_bearer=(os.environ.get("GATEWAY_FLOW2API_BEARER") or "").strip(),
+        flow2api_bearer_previous=(os.environ.get("GATEWAY_FLOW2API_BEARER_PREVIOUS") or "").strip(),
         agent_device_token=(os.environ.get("GATEWAY_AGENT_DEVICE_TOKEN") or "").strip(),
         agent_auth_mode=auth_mode,  # type: ignore[arg-type]
         keygen_verify_mode=verify_mode,  # type: ignore[arg-type]

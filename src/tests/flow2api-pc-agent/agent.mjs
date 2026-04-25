@@ -85,8 +85,16 @@ function parseAgentTokenIdFromEnvOrConfig() {
   }
   try {
     const parsed = JSON.parse(raw);
-    if (parsed && typeof parsed === "object" && typeof parsed.licenseTokenId === "string") {
-      return parsed.licenseTokenId.trim();
+    if (parsed && typeof parsed === "object") {
+      if (typeof parsed.licenseTokenId === "string" && parsed.licenseTokenId.trim()) {
+        return parsed.licenseTokenId.trim();
+      }
+      if (typeof parsed.agent_token_id === "string" && parsed.agent_token_id.trim()) {
+        return parsed.agent_token_id.trim();
+      }
+      if (typeof parsed.agentTokenId === "string" && parsed.agentTokenId.trim()) {
+        return parsed.agentTokenId.trim();
+      }
     }
   } catch {
     // ignore json parse errors
@@ -111,6 +119,12 @@ function parseAgentTokenFromEnvOrConfig() {
       if (parsed && typeof parsed === "object") {
         if (typeof parsed.licenseToken === "string" && parsed.licenseToken.trim()) {
           return parsed.licenseToken.trim();
+        }
+        if (typeof parsed.agent_token === "string" && parsed.agent_token.trim()) {
+          return parsed.agent_token.trim();
+        }
+        if (typeof parsed.agentToken === "string" && parsed.agentToken.trim()) {
+          return parsed.agentToken.trim();
         }
         if (typeof parsed.key === "string" && parsed.key.trim()) {
           return parsed.key.trim();
@@ -240,6 +254,11 @@ function sendJson(ws, obj) {
 }
 
 function main() {
+  console.log("registration context", {
+    hasAgentToken: Boolean(CONFIG.agentToken),
+    hasAgentTokenId: Boolean(CONFIG.agentTokenId),
+    tokenIdsCount: Array.isArray(CONFIG.tokenIds) ? CONFIG.tokenIds.length : 0,
+  });
   if (!CONFIG.agentToken) {
     console.error(
       "Missing AGENT_TOKEN. Use one of:\n" +
@@ -271,6 +290,9 @@ function main() {
       type: "register",
       agent_token: CONFIG.agentToken,
       agent_token_id: CONFIG.agentTokenId,
+      // Compatibility payload for older/newer clients that still use licenseToken naming.
+      license_token: CONFIG.agentToken,
+      license_token_id: CONFIG.agentTokenId,
       agent_id: CONFIG.agentId,
       token_ids: CONFIG.tokenIds,
     };
