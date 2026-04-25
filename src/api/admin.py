@@ -1578,6 +1578,17 @@ async def update_managed_api_key(
     return {"success": True, "message": "Managed API key updated"}
 
 
+@router.get("/api/admin/managed-apikeys/audit")
+async def list_managed_api_key_audit(
+    key_id: Optional[int] = None,
+    limit: int = 200,
+    token: str = Depends(verify_admin_token),
+):
+    """Must be registered before /managed-apikeys/{key_id} or 'audit' is parsed as key_id (422)."""
+    logs = await db.list_api_key_audit_logs(limit=limit, key_id=key_id)
+    return {"success": True, "logs": logs}
+
+
 @router.get("/api/admin/managed-apikeys/{key_id}")
 async def get_managed_api_key(
     key_id: int,
@@ -1600,16 +1611,6 @@ async def delete_managed_api_key(
         raise HTTPException(status_code=404, detail="Managed API key not found")
     await db.delete_api_key(key_id)
     return {"success": True, "message": "Managed API key deleted"}
-
-
-@router.get("/api/admin/managed-apikeys/audit")
-async def list_managed_api_key_audit(
-    key_id: Optional[int] = None,
-    limit: int = 200,
-    token: str = Depends(verify_admin_token),
-):
-    logs = await db.list_api_key_audit_logs(limit=limit, key_id=key_id)
-    return {"success": True, "logs": logs}
 
 
 @router.post("/api/admin/debug")

@@ -170,8 +170,9 @@ def _guess_mime_type(uri: str, fallback: str) -> str:
 
 
 def _extract_cache_filename(url: str) -> Optional[str]:
+    """Resolve filename from owner-scoped cache URLs (must not overlap /api/cache/config|stats|files)."""
     path = urlparse(url).path
-    marker = "/api/cache/"
+    marker = "/api/cache/file/"
     if marker not in path:
         return None
     filename = path.split(marker, 1)[-1].strip().split("/", 1)[0]
@@ -244,7 +245,7 @@ async def _load_image_bytes_from_uri(uri: str, api_key_id: Optional[int] = None)
         _, image_bytes = _decode_data_url(uri)
         return image_bytes
 
-    if uri.startswith("http://") or uri.startswith("https://") or "/api/cache/" in uri:
+    if uri.startswith("http://") or uri.startswith("https://") or "/api/cache/file/" in uri:
         image_bytes = await retrieve_image_data(uri, api_key_id=api_key_id)
         if image_bytes:
             return image_bytes
@@ -349,7 +350,7 @@ async def _append_openai_reference_images(
                 continue
 
             for image_url in reversed(matches):
-                if not image_url.startswith("http") and "/api/cache/" not in image_url:
+                if not image_url.startswith("http") and "/api/cache/file/" not in image_url:
                     continue
                 try:
                     downloaded_bytes = await retrieve_image_data(image_url, api_key_id=api_key_id)
@@ -819,7 +820,7 @@ def _resolve_allowed_token_ids(auth_ctx: AuthContext) -> Optional[set[int]]:
     return None
 
 
-@router.get("/api/cache/{filename}")
+@router.get("/api/cache/file/{filename}")
 async def get_cached_media(filename: str, auth_ctx: AuthContext = Depends(verify_api_key_flexible)):
     handler = _ensure_generation_handler()
     if auth_ctx.key_id is None:

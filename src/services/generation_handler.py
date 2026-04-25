@@ -2063,7 +2063,7 @@ class GenerationHandler:
         return f"http://{server_host}:{config.server_port}"
 
     def _build_cache_url(self, filename: str, response_state: Optional[Dict[str, Any]] = None) -> str:
-        return f"{self._get_base_url(response_state)}/api/cache/{filename}"
+        return f"{self._get_base_url(response_state)}/api/cache/file/{filename}"
 
     async def _update_request_log_progress(
         self,
