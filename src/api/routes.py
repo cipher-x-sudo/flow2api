@@ -21,6 +21,7 @@ from ..core.model_resolver import get_base_model_aliases, resolve_model_name
 from ..core.models import (
     ChatCompletionRequest,
     ChatMessage,
+    FlowProjectCreateRequest,
     GeminiContent,
     GeminiGenerateContentRequest,
 )
@@ -818,6 +819,54 @@ def _resolve_allowed_token_ids(auth_ctx: AuthContext) -> Optional[set[int]]:
     if not auth_ctx.is_legacy and auth_ctx.allowed_accounts:
         return {int(x) for x in auth_ctx.allowed_accounts}
     return None
+
+
+def _require_managed_projects_write(auth_ctx: AuthContext) -> None:
+    """Managed keys need wildcard or projects:write to create Flow projects."""
+    if auth_ctx.is_legacy:
+        return
+    if "*" in auth_ctx.scopes or "projects:write" in auth_ctx.scopes:
+        return
+    raise HTTPException(
+        status_code=403,
+        detail="Missing scope: allow '*' or add 'projects:write' for this key",
+    )
+
+
+@router.post("/v1/projects")
+async def create_flow_project(
+    body: FlowProjectCreateRequest,
+    auth_ctx: AuthContext = Depends(verify_api_key_flexible),
+):
+    """Create a VideoFX project for an assigned account; row is tagged with the managed api_key_id."""
+    if auth_ctx.key_id is None:
+        raise HTTPException(status_code=403, detail="Managed API key required")
+    _require_managed_projects_write(auth_ctx)
+    account_id = int(body.account_id)
+    if account_id not in auth_ctx.allowed_accounts:
+        raise HTTPException(status_code=400, detail="account_id is not assigned to this API key")
+
+    handler = _ensure_generation_handler()
+    title = (body.title or "").strip() or None
+    try:
+        project = await handler.token_manager.create_project_for_token(
+            account_id,
+            title=title,
+            set_as_current=bool(body.set_as_current),
+            api_key_id=auth_ctx.key_id,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Create project failed: {str(e)}")
+
+    return {
+        "object": "flow_project",
+        "project_id": project.project_id,
+        "project_name": project.project_name,
+        "token_id": project.token_id,
+        "set_as_current": body.set_as_current,
+    }
 
 
 @router.get("/api/cache/file/{filename}")

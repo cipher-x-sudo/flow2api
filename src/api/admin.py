@@ -965,6 +965,7 @@ def _project_to_dict(project):
         "id": project.id,
         "project_id": project.project_id,
         "project_name": project.project_name,
+        "token_id": project.token_id,
         "is_active": bool(project.is_active),
         "created_at": to_iso(project.created_at),
     }
@@ -1596,6 +1597,117 @@ async def list_managed_api_key_audit(
     total = await db.count_api_key_audit_logs(key_id=key_id)
     logs = await db.list_api_key_audit_logs(limit=limit, offset=offset, key_id=key_id)
     return {"success": True, "logs": logs, "total": total, "limit": limit, "offset": offset}
+
+
+@router.get("/api/admin/managed-apikeys/{key_id}/projects")
+async def list_managed_api_key_projects(
+    key_id: int,
+    limit: int = 10,
+    offset: int = 0,
+    token: str = Depends(verify_admin_token),
+):
+    """Paginated VideoFX projects scoped to a managed API key + per-account current project cursors."""
+    detail = await db.get_api_key_detail(key_id)
+    if not detail:
+        raise HTTPException(status_code=404, detail="Managed API key not found")
+    limit = max(1, min(limit, 100))
+    offset = max(0, offset)
+    total = await db.count_projects_by_api_key(key_id)
+    projects = await db.list_projects_by_api_key(key_id, limit=limit, offset=offset)
+
+    accounts_out = []
+    for account_id in await db.get_api_key_account_ids(key_id):
+        t = await token_manager.get_token(account_id)
+        if t:
+            accounts_out.append(
+                {
+                    "token_id": t.id,
+                    "email": t.email or None,
+                    "current_project_id": t.current_project_id,
+                    "current_project_name": t.current_project_name,
+                }
+            )
+        else:
+            accounts_out.append(
+                {
+                    "token_id": account_id,
+                    "email": None,
+                    "current_project_id": None,
+                    "current_project_name": None,
+                }
+            )
+
+    return {
+        "success": True,
+        "projects": [_project_to_dict(p) for p in projects],
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "accounts": accounts_out,
+    }
+
+
+@router.post("/api/admin/managed-apikeys/{key_id}/projects")
+async def create_managed_api_key_project(
+    key_id: int,
+    request: dict,
+    token: str = Depends(verify_admin_token),
+):
+    """Create a VideoFX project for a token assigned to this managed key; tags projects.api_key_id."""
+    detail = await db.get_api_key_detail(key_id)
+    if not detail:
+        raise HTTPException(status_code=404, detail="Managed API key not found")
+
+    raw_tid = request.get("token_id")
+    if raw_tid is None:
+        raise HTTPException(status_code=400, detail="token_id is required")
+    try:
+        token_id = int(raw_tid)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="token_id must be an integer")
+    allowed = set(await db.get_api_key_account_ids(key_id))
+    if token_id not in allowed:
+        raise HTTPException(status_code=400, detail="token_id is not assigned to this API key")
+
+    t = await token_manager.get_token(token_id)
+    if not t:
+        raise HTTPException(status_code=404, detail="Token not found")
+
+    title = request.get("title")
+    if title is not None and not isinstance(title, str):
+        raise HTTPException(status_code=400, detail="title must be a string")
+    if isinstance(title, str):
+        title = title.strip() or None
+    set_as_current = request.get("set_as_current", True)
+    if not isinstance(set_as_current, bool):
+        raise HTTPException(status_code=400, detail="set_as_current must be a boolean")
+
+    try:
+        project = await token_manager.create_project_for_token(
+            token_id,
+            title=title,
+            set_as_current=set_as_current,
+            api_key_id=key_id,
+        )
+        updated = await token_manager.get_token(token_id) if set_as_current else None
+        return {
+            "success": True,
+            "message": "Project created",
+            "project": _project_to_dict(project),
+            "token": (
+                {
+                    "id": updated.id,
+                    "current_project_id": updated.current_project_id,
+                    "current_project_name": updated.current_project_name,
+                }
+                if updated
+                else None
+            ),
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Create project failed: {str(e)}")
 
 
 @router.get("/api/admin/managed-apikeys/{key_id}")

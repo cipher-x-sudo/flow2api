@@ -284,6 +284,14 @@ class GeminiGenerateContentRequest(BaseModel):
     model_config = ConfigDict(extra="allow")
 
 
+class FlowProjectCreateRequest(BaseModel):
+    """Create a VideoFX (Flow) project using a managed API key."""
+
+    account_id: int
+    title: Optional[str] = None
+    set_as_current: bool = True
+
+
 class ChatCompletionRequest(BaseModel):
     """Chat completion request (OpenAI compatible + Gemini extension)"""
 

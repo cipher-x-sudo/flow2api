@@ -112,8 +112,26 @@ export interface TokenProjectRow {
   id?: number
   project_id: string
   project_name: string
+  token_id?: number
   is_active?: boolean
   created_at?: string | null
+}
+
+/** GET /api/admin/managed-apikeys/:id/projects */
+export interface ManagedApiKeyAccountSummary {
+  token_id: number
+  email?: string | null
+  current_project_id?: string | null
+  current_project_name?: string | null
+}
+
+export interface ManagedApiKeyProjectsResponse {
+  success?: boolean
+  projects?: TokenProjectRow[]
+  total?: number
+  limit?: number
+  offset?: number
+  accounts?: ManagedApiKeyAccountSummary[]
 }
 
 export interface CreateProjectResponse {

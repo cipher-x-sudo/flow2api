@@ -10,7 +10,9 @@ import { Label } from "../ui/label"
 import { Switch } from "../ui/switch"
 import { Badge } from "../ui/badge"
 import { toast } from "sonner"
-import { ChevronLeft, ChevronRight, Eye, Loader2, Pencil, Plus, RefreshCw, Trash2 } from "lucide-react"
+import { ChevronLeft, ChevronRight, Eye, FolderKanban, Loader2, Pencil, Plus, RefreshCw, Trash2 } from "lucide-react"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select"
+import type { ManagedApiKeyProjectsResponse } from "../../types/admin"
 
 type TokenRow = { id: number; email?: string; is_active?: boolean }
 type ManagedApiKey = {
@@ -48,12 +50,18 @@ type LimitRow = { endpoint: string; rpm: string; rph: string; burst: string }
 type ScopeOption = { id: string; label: string; description: string }
 
 const AUDIT_PAGE_SIZE = 25
+const KEY_PROJECT_PAGE_SIZE = 10
 
 const AVAILABLE_SCOPES: ScopeOption[] = [
   { id: "*", label: "Full access", description: "Allows all currently supported API actions." },
   { id: "models:read", label: "Read models", description: "Allows `/v1/models`, `/v1/models/aliases`, and Gemini model listing endpoints." },
   { id: "generate:chat", label: "Generate chat", description: "Allows `/v1/chat/completions` (stream and non-stream)." },
   { id: "generate:gemini", label: "Generate gemini", description: "Allows Gemini `generateContent` and `streamGenerateContent` endpoints." },
+  {
+    id: "projects:write",
+    label: "Create Flow projects",
+    description: "Allows `POST /v1/projects` to create VideoFX projects for assigned accounts.",
+  },
 ]
 
 export function ApiKeyManagement() {
@@ -80,6 +88,16 @@ export function ApiKeyManagement() {
     { endpoint: "/v1/chat/completions", rpm: "60", rph: "2000", burst: "10" },
   ])
   const [createdKey, setCreatedKey] = useState("")
+
+  const [keyProjectsPage, setKeyProjectsPage] = useState(0)
+  const [keyProjectsLoading, setKeyProjectsLoading] = useState(false)
+  const [keyProjectsTotal, setKeyProjectsTotal] = useState(0)
+  const [keyProjectRows, setKeyProjectRows] = useState<NonNullable<ManagedApiKeyProjectsResponse["projects"]>>([])
+  const [keyProjectAccounts, setKeyProjectAccounts] = useState<NonNullable<ManagedApiKeyProjectsResponse["accounts"]>>([])
+  const [newProjTokenId, setNewProjTokenId] = useState("")
+  const [newProjTitle, setNewProjTitle] = useState("")
+  const [newProjSetCurrent, setNewProjSetCurrent] = useState(true)
+  const [creatingProj, setCreatingProj] = useState(false)
 
   const parseScopes = (scopesRaw?: string | null): string[] => {
     const parsed = String(scopesRaw || "")
@@ -117,6 +135,31 @@ export function ApiKeyManagement() {
     }, 0)
     return () => window.clearTimeout(timeoutId)
   }, [loadAll])
+
+  const loadKeyProjects = useCallback(async () => {
+    if (!token || editingKeyId == null || !editOpen) return
+    setKeyProjectsLoading(true)
+    try {
+      const offset = keyProjectsPage * KEY_PROJECT_PAGE_SIZE
+      const r = await adminJson<ManagedApiKeyProjectsResponse>(
+        `/api/admin/managed-apikeys/${editingKeyId}/projects?limit=${KEY_PROJECT_PAGE_SIZE}&offset=${offset}`,
+        token
+      )
+      if (r.ok && r.data?.success) {
+        setKeyProjectRows(Array.isArray(r.data.projects) ? r.data.projects : [])
+        setKeyProjectsTotal(typeof r.data.total === "number" ? r.data.total : 0)
+        setKeyProjectAccounts(Array.isArray(r.data.accounts) ? r.data.accounts : [])
+      } else {
+        toast.error("Failed to load key projects")
+      }
+    } finally {
+      setKeyProjectsLoading(false)
+    }
+  }, [token, editingKeyId, editOpen, keyProjectsPage])
+
+  useEffect(() => {
+    void loadKeyProjects()
+  }, [loadKeyProjects])
 
   const toggleAccount = (id: number) => {
     setSelectedAccountIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]))
@@ -195,6 +238,9 @@ export function ApiKeyManagement() {
     }
     const key = res.data.key
     setEditingKeyId(key.id)
+    setKeyProjectRows([])
+    setKeyProjectAccounts([])
+    setKeyProjectsTotal(0)
     setClientName(key.client_name || "")
     setLabel(key.label || "default")
     setSelectedScopes(parseScopes(key.scopes))
@@ -210,8 +256,63 @@ export function ApiKeyManagement() {
           }))
         : [{ endpoint: "/v1/chat/completions", rpm: "60", rph: "2000", burst: "10" }]
     )
+    setKeyProjectsPage(0)
+    const accIds = Array.isArray(key.account_ids) ? key.account_ids : []
+    setNewProjTokenId(accIds.length ? String(accIds[0]) : "")
+    setNewProjTitle("")
+    setNewProjSetCurrent(true)
     setEditOpen(true)
   }
+
+  const handleEditOpenChange = (open: boolean) => {
+    setEditOpen(open)
+    if (!open) {
+      setEditingKeyId(null)
+      setKeyProjectsPage(0)
+      setKeyProjectRows([])
+      setKeyProjectAccounts([])
+      setKeyProjectsTotal(0)
+      setNewProjTokenId("")
+      setNewProjTitle("")
+      setNewProjSetCurrent(true)
+    }
+  }
+
+  const createKeyProject = async () => {
+    if (!token || editingKeyId == null) return
+    const tid = parseInt(newProjTokenId, 10)
+    if (!Number.isFinite(tid)) {
+      toast.error("Select an account")
+      return
+    }
+    if (!selectedAccountIds.includes(tid)) {
+      toast.error("Selected account must be assigned to this key")
+      return
+    }
+    setCreatingProj(true)
+    try {
+      const res = await adminFetch(`/api/admin/managed-apikeys/${editingKeyId}/projects`, token, {
+        method: "POST",
+        body: JSON.stringify({
+          token_id: tid,
+          title: newProjTitle.trim() || null,
+          set_as_current: newProjSetCurrent,
+        }),
+      })
+      if (!res) return
+      const data = await res.json().catch(() => ({}))
+      if (data.success) {
+        toast.success("Project created")
+        await loadKeyProjects()
+      } else {
+        toast.error(data.detail || data.message || "Create failed")
+      }
+    } finally {
+      setCreatingProj(false)
+    }
+  }
+
+  const tokenEmail = (tid: number) => tokens.find((x) => x.id === tid)?.email || "—"
 
   const submitEditKey = async () => {
     if (!token || editingKeyId == null) return
@@ -235,8 +336,7 @@ export function ApiKeyManagement() {
       const data = await res.json()
       if (data.success) {
         toast.success("Managed API key updated")
-        setEditOpen(false)
-        setEditingKeyId(null)
+        handleEditOpenChange(false)
         await loadAll()
       } else {
         toast.error(data.detail || data.message || "Update failed")
@@ -535,8 +635,8 @@ export function ApiKeyManagement() {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={editOpen} onOpenChange={setEditOpen}>
-        <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+      <Dialog open={editOpen} onOpenChange={handleEditOpenChange}>
+        <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Edit managed API key</DialogTitle>
           </DialogHeader>
@@ -607,9 +707,187 @@ export function ApiKeyManagement() {
                 </div>
               ))}
             </div>
+
+            {editingKeyId != null ? (
+              <div className="space-y-4 rounded-lg border bg-muted/20 p-4">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <FolderKanban className="h-5 w-5 text-muted-foreground" />
+                    <h3 className="text-sm font-semibold">VideoFX projects</h3>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => void loadKeyProjects()}
+                    disabled={keyProjectsLoading}
+                    className="h-8"
+                  >
+                    <RefreshCw className={`h-3.5 w-3.5 mr-1 ${keyProjectsLoading ? "animate-spin" : ""}`} />
+                    Refresh
+                  </Button>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Projects tagged with this key and each account&apos;s current Flow project cursor. Public API:{" "}
+                  <code className="rounded bg-muted px-1 text-[10px]">POST /v1/projects</code> (requires{" "}
+                  <code className="rounded bg-muted px-1 text-[10px]">projects:write</code> or <code className="rounded bg-muted px-1 text-[10px]">*</code>
+                  ).
+                </p>
+
+                {keyProjectAccounts.length ? (
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    {keyProjectAccounts.map((a) => (
+                      <Card key={a.token_id} className="border bg-card shadow-none">
+                        <CardHeader className="space-y-1 p-3 pb-2">
+                          <CardTitle className="text-xs font-medium text-muted-foreground">Account #{a.token_id}</CardTitle>
+                          <p className="truncate text-sm font-medium" title={a.email || ""}>
+                            {a.email || "—"}
+                          </p>
+                        </CardHeader>
+                        <CardContent className="space-y-1 p-3 pt-0 text-xs">
+                          <p className="text-muted-foreground">Current project</p>
+                          <p className="font-mono text-[10px] break-all" title={a.current_project_id || ""}>
+                            {a.current_project_id || "—"}
+                          </p>
+                          {a.current_project_name ? (
+                            <p className="text-muted-foreground truncate" title={a.current_project_name}>
+                              {a.current_project_name}
+                            </p>
+                          ) : null}
+                        </CardContent>
+                      </Card>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-xs text-muted-foreground">No accounts assigned — add accounts above to manage projects.</p>
+                )}
+
+                <div className="rounded-md border bg-background">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead className="text-xs">Project ID</TableHead>
+                        <TableHead className="text-xs">Name</TableHead>
+                        <TableHead className="text-xs">Token</TableHead>
+                        <TableHead className="text-xs">Created</TableHead>
+                        <TableHead className="text-xs">Active</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {keyProjectsLoading && !keyProjectRows.length ? (
+                        <TableRow>
+                          <TableCell colSpan={5} className="text-center text-muted-foreground py-6 text-xs">
+                            Loading…
+                          </TableCell>
+                        </TableRow>
+                      ) : !keyProjectRows.length ? (
+                        <TableRow>
+                          <TableCell colSpan={5} className="text-center text-muted-foreground py-6 text-xs">
+                            No projects stored for this key yet
+                          </TableCell>
+                        </TableRow>
+                      ) : (
+                        keyProjectRows.map((p) => (
+                          <TableRow key={p.project_id}>
+                            <TableCell className="max-w-[140px] truncate font-mono text-[10px]" title={p.project_id}>
+                              {p.project_id}
+                            </TableCell>
+                            <TableCell className="max-w-[120px] truncate text-xs" title={p.project_name}>
+                              {p.project_name}
+                            </TableCell>
+                            <TableCell className="text-xs">
+                              #{p.token_id ?? "—"} {typeof p.token_id === "number" ? tokenEmail(p.token_id) : ""}
+                            </TableCell>
+                            <TableCell className="text-[10px] text-muted-foreground">{p.created_at || "—"}</TableCell>
+                            <TableCell>
+                              <Badge variant={p.is_active !== false ? "default" : "secondary"} className="text-[10px]">
+                                {p.is_active !== false ? "yes" : "no"}
+                              </Badge>
+                            </TableCell>
+                          </TableRow>
+                        ))
+                      )}
+                    </TableBody>
+                  </Table>
+                  <div className="flex flex-wrap items-center justify-between gap-2 border-t px-3 py-2 text-xs text-muted-foreground">
+                    <span>
+                      {keyProjectsTotal === 0
+                        ? "No rows"
+                        : `Showing ${keyProjectsPage * KEY_PROJECT_PAGE_SIZE + 1}–${Math.min(keyProjectsPage * KEY_PROJECT_PAGE_SIZE + keyProjectRows.length, keyProjectsTotal)} of ${keyProjectsTotal}`}
+                    </span>
+                    <div className="flex items-center gap-1">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="h-8"
+                        disabled={keyProjectsLoading || keyProjectsPage <= 0}
+                        onClick={() => setKeyProjectsPage((p) => Math.max(0, p - 1))}
+                      >
+                        <ChevronLeft className="h-4 w-4" />
+                        Previous
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="h-8"
+                        disabled={keyProjectsLoading || (keyProjectsPage + 1) * KEY_PROJECT_PAGE_SIZE >= keyProjectsTotal}
+                        onClick={() => setKeyProjectsPage((p) => p + 1)}
+                      >
+                        Next
+                        <ChevronRight className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="space-y-3 rounded-md border bg-background p-3">
+                  <Label className="text-sm font-medium">Create project</Label>
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <div className="space-y-1">
+                      <Label className="text-xs text-muted-foreground">Account</Label>
+                      <Select value={newProjTokenId} onValueChange={setNewProjTokenId}>
+                        <SelectTrigger className="h-9">
+                          <SelectValue placeholder="Select account" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {tokens
+                            .filter((t) => selectedAccountIds.includes(t.id))
+                            .map((t) => (
+                              <SelectItem key={t.id} value={String(t.id)}>
+                                #{t.id} {t.email || ""}
+                              </SelectItem>
+                            ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-1">
+                      <Label className="text-xs text-muted-foreground">Title (optional)</Label>
+                      <Input value={newProjTitle} onChange={(e) => setNewProjTitle(e.target.value)} placeholder="Custom project title" />
+                    </div>
+                  </div>
+                  <label className="flex items-center gap-2 text-sm">
+                    <input type="checkbox" checked={newProjSetCurrent} onChange={(e) => setNewProjSetCurrent(e.target.checked)} />
+                    Set as current project for this account
+                  </label>
+                  <Button
+                    type="button"
+                    size="sm"
+                    onClick={() => void createKeyProject()}
+                    disabled={creatingProj || !newProjTokenId || !selectedAccountIds.length}
+                  >
+                    {creatingProj ? <Loader2 className="h-4 w-4 animate-spin" /> : "Create project"}
+                  </Button>
+                  {!selectedAccountIds.length ? (
+                    <p className="text-xs text-amber-600 dark:text-amber-500">Assign at least one account above to create a project.</p>
+                  ) : null}
+                </div>
+              </div>
+            ) : null}
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setEditOpen(false)}>
+            <Button variant="outline" onClick={() => handleEditOpenChange(false)}>
               Close
             </Button>
             <Button onClick={submitEditKey} disabled={saving}>
