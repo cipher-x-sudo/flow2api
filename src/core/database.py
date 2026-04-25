@@ -2594,12 +2594,17 @@ class Database:
         account_ids: Optional[List[int]] = None,
         endpoint_limits: Optional[Dict[str, Dict[str, int]]] = None,
     ):
+        # Resolve client outside the write transaction: _get_or_create_api_client also
+        # takes _write_lock; nesting here deadlocks asyncio.Lock until Cloudflare 524.
+        resolved_client_id: Optional[int] = None
+        if client_name is not None:
+            resolved_client_id = await self._get_or_create_api_client(client_name.strip())
+
         async with self._connect(write=True) as db:
-            if client_name is not None:
-                client_id = await self._get_or_create_api_client(client_name.strip())
+            if resolved_client_id is not None:
                 await db.execute(
                     "UPDATE api_keys SET client_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                    (client_id, key_id),
+                    (resolved_client_id, key_id),
                 )
             if label is not None:
                 await db.execute(
