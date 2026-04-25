@@ -4,7 +4,7 @@ FastAPI service that implements the same **HTTP** contract as Flow2API’s `remo
 
 ## Data model (MVP)
 
-- **In-process only:** optional `token_id`-based routing for legacy callers; API-managed callers can omit `token_id`.
+- **In-process only:** connected-agent pool dispatch (no token_id routing).
 - **Redis** is in `docker-compose.agent.yml` (merge with `docker-compose.yml`); the gateway MVP does not require Redis logic yet.
 - Optional Pydantic shapes: [`schemas.py`](schemas.py).
 
@@ -28,10 +28,9 @@ See [../../docs/agent-gateway.md](../../docs/agent-gateway.md).
 
 1. Connect to `ws://<host>:9080/ws/agents`.
 2. Send one JSON line (`register`) in one of these modes:
-   - Legacy: `{"type":"register","device_token":"<GATEWAY_AGENT_DEVICE_TOKEN>","token_ids":[1]}`
-   - Keygen (jwt): `{"type":"register","agent_token":"<keygen-token>","token_ids":[1]}`
-   - Keygen (introspection): `{"type":"register","agent_token":"<keygen-token>","agent_token_id":"<keygen-token-uuid>","token_ids":[1]}`
-   `token_ids` are a client hint; server intersects with ownership policy from `AGENT_TOKEN_OWNERSHIP_JSON` when configured.
+   - Legacy: `{"type":"register","device_token":"<GATEWAY_AGENT_DEVICE_TOKEN>"}`
+   - Keygen (jwt): `{"type":"register","agent_token":"<keygen-token>"}`
+   - Keygen (introspection): `{"type":"register","agent_token":"<keygen-token>","agent_token_id":"<keygen-token-uuid>"}`
 3. Receive `solve_job` messages; reply with `solve_result` or `solve_error`:
 
 ```json
@@ -51,7 +50,7 @@ Set `GATEWAY_AGENT_AUTH_MODE=keygen` (or `dual` during migration) and configure:
 - `KEYGEN_ACCOUNT` (required for account-scoped introspection)
 - `AGENT_TOKEN_OWNERSHIP_JSON` map, e.g. `{"machine-1":[1,2],"license-abc":[3]}`
 
-In Keygen mode, each agent sends `agent_token` and receives only `authorized_token_ids` in `registered`.
+In Keygen mode, each agent sends `agent_token` and receives `registered` with identity metadata.
 
 Auth boundary reminder:
 

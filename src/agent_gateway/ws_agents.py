@@ -39,14 +39,6 @@ def _ws_reason(text: str, max_bytes: int = 120) -> str:
     return "policy violation"
 
 
-def _parse_token_ids(raw_ids: Any) -> list[int]:
-    try:
-        token_ids = [int(x) for x in (raw_ids or [])]
-    except (TypeError, ValueError) as e:
-        raise ValueError("token_ids must be a list of integers") from e
-    return sorted({int(x) for x in token_ids})
-
-
 async def _resolve_identity(data: dict[str, Any], s) -> AgentIdentity:
     if s.agent_auth_mode in {"legacy", "dual"} and str(data.get("device_token") or ""):
         if data.get("device_token") != s.agent_device_token:
@@ -75,9 +67,6 @@ async def ws_agents(websocket: WebSocket) -> None:
     if s.agent_auth_mode in {"legacy", "dual"} and not s.agent_device_token:
         await websocket.close(code=4500, reason="GATEWAY_AGENT_DEVICE_TOKEN is not set")
         return
-
-    # Load ownership mapping once per connection.
-    registry.ownership.load_json(s.agent_token_ownership_json)
 
     first = await websocket.receive_text()
     try:
@@ -110,28 +99,6 @@ async def ws_agents(websocket: WebSocket) -> None:
         )
         return
 
-    try:
-        token_ids = _parse_token_ids(data.get("token_ids"))
-    except ValueError as e:
-        await websocket.close(
-            code=http_status.WS_1008_POLICY_VIOLATION,
-            reason=str(e),
-        )
-        return
-
-    authorized_ids = registry.resolve_authorized_token_ids(
-        subject=identity.subject,
-        machine_id=identity.machine_id,
-        license_id=identity.license_id,
-        claimed_token_ids=token_ids,
-    )
-    if not authorized_ids:
-        await websocket.close(
-            code=http_status.WS_1008_POLICY_VIOLATION,
-            reason="no authorized token_ids for this agent",
-        )
-        return
-
     await registry.register_agent(
         websocket,
         auth_method=identity.auth_method,
@@ -139,15 +106,11 @@ async def ws_agents(websocket: WebSocket) -> None:
         machine_id=identity.machine_id,
         license_id=identity.license_id,
         account_id=identity.account_id,
-        claimed_token_ids=token_ids,
-        authorized_token_ids=authorized_ids,
     )
     try:
         await websocket.send_json(
             {
                 "type": "registered",
-                "token_ids": authorized_ids,
-                "authorized_token_ids": authorized_ids,
                 "subject": identity.subject,
                 "auth_method": identity.auth_method,
             }

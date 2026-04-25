@@ -85,7 +85,6 @@ For a dedicated PC-agent integration walkthrough, see: [agent-client-connection.
 | Field | Type | Required | Description |
 |--------|------|----------|-------------|
 | `project_id` | string | Yes | Google Flow / VideoFX project id for this account. |
-| `token_id` | integer | No | Optional legacy routing hint. If provided, gateway routes to an agent that registered this token id; if omitted, gateway uses API-managed routing and picks an available connected agent. |
 | `action` | string | No | Default `"IMAGE_GENERATION"`. Also used: e.g. `"VIDEO_GENERATION"`. |
 
 Example:
@@ -116,7 +115,7 @@ Example:
 **Error responses (non-200):** FastAPI style — JSON with a `detail` string, for example:
 
 - **400** — missing `project_id` or bad input.
-- **503** — no connected agent (or no connected agent for the provided `token_id`).
+- **503** — no connected agent.
 - **504** — no `solve_result` / `solve_error` within `SOLVE_TIMEOUT_SECONDS`.
 - **500 / 502** — agent error, incomplete result, or internal failure.
 
@@ -132,8 +131,6 @@ Optional warm-up hint (body shape matches what Flow2API sends; the MVP gateway o
   "action": "IMAGE_GENERATION"
 }
 ```
-
-`token_id` may be `null` or omitted depending on the caller.
 
 **Response (200):**
 
@@ -180,8 +177,7 @@ Reports an upstream error for that session.
 ```json
 {
   "type": "register",
-  "device_token": "<GATEWAY_AGENT_DEVICE_TOKEN>",
-  "token_ids": [1, 2, 3]
+  "device_token": "<GATEWAY_AGENT_DEVICE_TOKEN>"
 }
 ```
 
@@ -191,8 +187,7 @@ Or in Keygen mode:
 {
   "type": "register",
   "agent_token": "<keygen-token>",
-  "agent_token_id": "<keygen-token-resource-uuid>",
-  "token_ids": [1, 2, 3]
+  "agent_token_id": "<keygen-token-resource-uuid>"
 }
 ```
 
@@ -207,8 +202,6 @@ Notes for Keygen mode:
 ```json
 {
   "type": "registered",
-  "token_ids": [2],
-  "authorized_token_ids": [2],
   "subject": "machine-1",
   "auth_method": "keygen"
 }
@@ -273,7 +266,6 @@ Pydantic reference types: [`src/agent_gateway/schemas.py`](../src/agent_gateway/
 | `KEYGEN_API_URL` | Keygen base URL (default `https://api.keygen.sh`). |
 | `KEYGEN_ACCOUNT` | Keygen account slug/UUID. Required for account-scoped introspection lookups. |
 | `KEYGEN_ISSUER` / `KEYGEN_AUDIENCE` | JWT claim checks for Keygen token verification. |
-| `AGENT_TOKEN_OWNERSHIP_JSON` | Ownership map JSON, e.g. `{"machine-1":[1,2],"license-abc":[3]}`; server intersects this with claimed token_ids. |
 | `SOLVE_TIMEOUT_SECONDS` | Max wait for a token (default 120). |
 | `REDIS_URL` | Reserved for Phase 3 (optional). |
 | `TUNNEL_TOKEN` | See root `.env` — for `cloudflared` in `docker-compose.agent.yml` (merge with `docker-compose.yml`). |

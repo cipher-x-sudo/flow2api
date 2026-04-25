@@ -22,9 +22,6 @@ async def api_v1_solve(
 ) -> dict[str, Any]:
     project_id = str(body.get("project_id") or "")
     action = str(body.get("action") or "IMAGE_GENERATION")
-    token_id: Optional[int] = body.get("token_id")
-    if token_id is not None:
-        token_id = int(token_id)
 
     if not project_id:
         raise HTTPException(
@@ -33,32 +30,16 @@ async def api_v1_solve(
         )
 
     s = load_settings()
-    registry.ownership.load_json(s.agent_token_ownership_json)
-    if token_id is not None and not registry.has_any_owner_for_token(int(token_id)):
-        raise HTTPException(
-            status_code=403,
-            detail="token_id is not authorized for any registered device policy",
-        )
     try:
         result = await registry.dispatch_solve(
-            token_id=token_id,
             project_id=project_id,
             action=action,
             timeout=float(s.solve_timeout_seconds),
         )
     except LookupError:
-        connected_ids = await registry.connected_token_ids()
-        if token_id is None:
-            detail = "no agent connected"
-        else:
-            detail = f"no agent connected for token_id={int(token_id)}"
-        if connected_ids:
-            detail += f"; connected_token_ids={connected_ids}"
-        else:
-            detail += "; connected_token_ids=[]"
         raise HTTPException(
             status_code=503,
-            detail=detail,
+            detail="no agent connected",
         ) from None
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e

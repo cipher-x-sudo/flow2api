@@ -62,18 +62,6 @@ function stubPageHtml(websiteKey) {
 </script></head><body></body></html>`;
 }
 
-function parseTokenIdsFromEnv() {
-  const raw = (process.env.AGENT_TOKEN_IDS || "").trim();
-  if (!raw) {
-    return null;
-  }
-  const ns = raw
-    .split(",")
-    .map((s) => parseInt(s.trim(), 10))
-    .filter((n) => !Number.isNaN(n));
-  return ns.length ? ns : null;
-}
-
 function parseAgentTokenIdFromEnvOrConfig() {
   const envValue = (process.env.AGENT_TOKEN_ID || FILE_CONFIG.agentTokenId || "").trim();
   if (envValue) {
@@ -137,7 +125,7 @@ function parseAgentTokenFromEnvOrConfig() {
   return raw;
 }
 
-/** Default config — override or use env: AGENT_TOKEN, AGENT_GATEWAY_WSS, AGENT_TOKEN_IDS */
+/** Default config — override or use env: AGENT_TOKEN, AGENT_GATEWAY_WSS. */
 const FILE_CONFIG = {
   // WebSocket to agent-gateway (HTTPS https://agents.prismacreative.online/ is the same host; path is /ws/agents)
   wss: "wss://agents.prismacreative.online/ws/agents",
@@ -147,7 +135,6 @@ const FILE_CONFIG = {
   agentTokenId: "45dc3792-55b4-4f57-a5ca-ac9f80bf4560",
   // Optional machine/license hint (server may ignore; useful for debugging/audit trails).
   agentId: "",
-  tokenIds: [1],
   userDataDir: path.join(__dirname, ".pc-agent-profile"),
   startUrl: "https://labs.google/fx/api/auth/providers",
   websiteKey: "6LdsFiUsAAAAAIjVDZcuLhaHiDn5nnHVXVRQGeMV",
@@ -161,7 +148,6 @@ const CONFIG = {
   agentToken: parseAgentTokenFromEnvOrConfig(),
   agentTokenId: parseAgentTokenIdFromEnvOrConfig(),
   agentId: (process.env.AGENT_ID || FILE_CONFIG.agentId || "").trim(),
-  tokenIds: parseTokenIdsFromEnv() ?? FILE_CONFIG.tokenIds,
 };
 
 let _context;
@@ -186,7 +172,7 @@ async function ensureContext() {
 }
 
 /**
- * @param {{ projectId: string, action: string, tokenId: number }} _job
+ * @param {{ projectId: string, action: string }} _job
  */
 async function runRecaptchaSolve(_job) {
   const context = await ensureContext();
@@ -257,7 +243,6 @@ function main() {
   console.log("registration context", {
     hasAgentToken: Boolean(CONFIG.agentToken),
     hasAgentTokenId: Boolean(CONFIG.agentTokenId),
-    tokenIdsCount: Array.isArray(CONFIG.tokenIds) ? CONFIG.tokenIds.length : 0,
   });
   if (!CONFIG.agentToken) {
     console.error(
@@ -278,11 +263,6 @@ function main() {
     );
     process.exit(1);
   }
-  if (!Array.isArray(CONFIG.tokenIds) || CONFIG.tokenIds.length === 0) {
-    console.error("Set FILE_CONFIG.tokenIds or AGENT_TOKEN_IDS (e.g. 1 or 1,2)");
-    process.exit(1);
-  }
-
   const ws = new WebSocket(CONFIG.wss, { handshakeTimeout: 20_000 });
 
   ws.on("open", () => {
@@ -294,10 +274,9 @@ function main() {
       license_token: CONFIG.agentToken,
       license_token_id: CONFIG.agentTokenId,
       agent_id: CONFIG.agentId,
-      token_ids: CONFIG.tokenIds,
     };
     ws.send(JSON.stringify(reg));
-    console.log("connected → register claimed token_ids", reg.token_ids);
+    console.log("connected → register sent");
   });
 
   ws.on("message", (data) => {
@@ -308,13 +287,9 @@ function main() {
       return;
     }
     if (msg.type === "registered") {
-      const authorized = Array.isArray(msg.authorized_token_ids)
-        ? msg.authorized_token_ids
-        : msg.token_ids;
       console.log("registered", {
         auth_method: msg.auth_method || "unknown",
         subject: msg.subject || "",
-        authorized_token_ids: authorized || [],
       });
       return;
     }
@@ -326,11 +301,10 @@ function main() {
       const jobId = msg.job_id;
       const projectId = String(msg.project_id || "");
       const action = String(msg.action || "IMAGE_GENERATION");
-      const tokenId = Number(msg.token_id);
-      console.log("solve_job", { jobId, projectId, action, tokenId });
+      console.log("solve_job", { jobId, projectId, action });
       void enqueue(async () => {
         try {
-          const { token, userAgent } = await runRecaptchaSolve({ projectId, action, tokenId });
+          const { token, userAgent } = await runRecaptchaSolve({ projectId, action });
           const sessionId = crypto.randomUUID();
           sendJson(ws, {
             type: "solve_result",

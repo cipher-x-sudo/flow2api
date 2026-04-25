@@ -1,9 +1,4 @@
-"""
-Message shapes for WebSocket agents (reference; validation can be tightened later).
-
-MVP routing: in-memory map **token_id → WebSocket**. Persistent token↔device binding belongs
-in a Dockerised DB or Redis in Phase 3.
-"""
+"""Message shapes for WebSocket agents (reference; validation can be tightened later)."""
 from typing import Literal, Optional
 
 from pydantic import AliasChoices, BaseModel, Field
@@ -31,8 +26,6 @@ class WsRegister(BaseModel):
     )
     # Optional machine or license identifier (for introspection fallback / debugging).
     agent_id: str = ""
-    # Client-side hint only; server should intersect against authorized ownership map.
-    token_ids: list[int] = Field(default_factory=list, validation_alias=AliasChoices("token_ids", "tokenIds"))
 
 
 class AgentIdentity(BaseModel):

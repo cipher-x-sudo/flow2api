@@ -60,7 +60,7 @@ npm start
 ```bash
 export AGENT_TOKEN="..."
 export AGENT_ID="machine-1"   # optional
-# optional: export AGENT_GATEWAY_WSS=...  export AGENT_TOKEN_IDS=1,2
+# optional: export AGENT_GATEWAY_WSS=...
 npm start
 ```
 
@@ -72,12 +72,11 @@ npm start
 | `agentToken` | `AGENT_TOKEN` | Keygen-derived agent credential sent in `register.agent_token` |
 | `agentTokenId` | `AGENT_TOKEN_ID` | Keygen token resource id sent in `register.agent_token_id` |
 | `agentId` | `AGENT_ID` | Optional machine/license hint for logs/debug |
-| `tokenIds` | `AGENT_TOKEN_IDS` (e.g. `1` or `1,2`) | Flow2API token **row ids** (admin) this PC serves |
 | `userDataDir` | — | Chromium profile; log in to Google/Flow on first run if needed |
 | `startUrl` / `websiteKey` | — | Should match Flow2API captcha **browser** settings |
 | `headless` | — | `false` recommended |
 
-After connect, gateway replies with `registered` and `authorized_token_ids`. Those are the server-accepted IDs after ownership policy intersection.
+After connect, gateway replies with `registered` including auth metadata.
 
 ## 3) Run
 

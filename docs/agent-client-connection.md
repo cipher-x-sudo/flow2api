@@ -36,8 +36,7 @@ The first message after WebSocket connect must be JSON with `type: "register"`.
 ```json
 {
   "type": "register",
-  "device_token": "<GATEWAY_AGENT_DEVICE_TOKEN>",
-  "token_ids": [1, 2, 3]
+  "device_token": "<GATEWAY_AGENT_DEVICE_TOKEN>"
 }
 ```
 
@@ -47,8 +46,7 @@ The first message after WebSocket connect must be JSON with `type: "register"`.
 {
   "type": "register",
   "agent_token": "<keygen-token>",
-  "agent_token_id": "<keygen-token-resource-uuid>",
-  "token_ids": [1, 2, 3]
+  "agent_token_id": "<keygen-token-resource-uuid>"
 }
 ```
 
@@ -59,9 +57,6 @@ Compatibility aliases accepted by gateway:
 
 Notes:
 
-- `token_ids` is a **hint** from client.
-- Server intersects this with policy from `AGENT_TOKEN_OWNERSHIP_JSON`.
-- If result is empty, connection is rejected with close reason `no authorized token_ids for this agent`.
 - In `KEYGEN_VERIFY_MODE=introspection`, `agent_token_id` is required. Use the Keygen token UUID (e.g. `licenseTokenId`).
 
 ## 4) Registration response
@@ -71,14 +66,10 @@ On success gateway sends:
 ```json
 {
   "type": "registered",
-  "token_ids": [2],
-  "authorized_token_ids": [2],
   "subject": "machine-1",
   "auth_method": "keygen"
 }
 ```
-
-`authorized_token_ids` is the final server-accepted set for dispatch.
 
 ## 5) Solve job flow
 
@@ -89,8 +80,7 @@ On success gateway sends:
   "type": "solve_job",
   "job_id": "uuid",
   "project_id": "flow-project-id",
-  "action": "IMAGE_GENERATION",
-  "token_id": 2
+  "action": "IMAGE_GENERATION"
 }
 ```
 
@@ -130,28 +120,8 @@ Common close reasons from gateway:
 - `agent_token_id required in introspection mode`
 - `invalid device token`
 - `agent auth failed: ...`
-- `token_ids must be a list of integers`
-- `no authorized token_ids for this agent`
 
-## 7) Ownership policy
-
-`AGENT_TOKEN_OWNERSHIP_JSON` format:
-
-```json
-{
-  "machine-1": [1, 2],
-  "license-abc": [3]
-}
-```
-
-Lookup behavior:
-
-- Gateway checks identity keys in order: `subject`, `machine_id`, `license_id`
-- Union of those entries = allowed set
-- Final authorized set = `claimed token_ids ∩ allowed set`
-- If ownership JSON is empty, gateway falls back to legacy trust of claimed IDs
-
-## 8) Minimal client checklist
+## 7) Minimal client checklist
 
 - Connect to `wss://<host>/ws/agents`
 - Send `register` as first frame
@@ -161,7 +131,7 @@ Lookup behavior:
 - On each `solve_job`, respond with `solve_result` or `solve_error`
 - Reconnect with backoff on close/error
 
-## 9) Quick test
+## 8) Quick test
 
 Health:
 
@@ -175,16 +145,16 @@ Manual solve trigger (HTTP side; bearer is `GATEWAY_FLOW2API_BEARER`):
 curl -sS -X POST "https://<agents-host>/api/v1/solve" \
   -H "Authorization: Bearer <GATEWAY_FLOW2API_BEARER>" \
   -H "Content-Type: application/json" \
-  -d '{"project_id":"test","token_id":2,"action":"IMAGE_GENERATION"}'
+  -d '{"project_id":"test","action":"IMAGE_GENERATION"}'
 ```
 
-## 10) User-side fallback example (headed server -> PC agent)
+## 9) User-side fallback example (headed server -> PC agent)
 
 This is the practical behavior many users want:
 
 - Flow2API runs with `captcha_method=browser` (server-side headed Playwright).
 - `browser_fallback_to_remote_browser=true`.
-- A PC agent is online and registered to gateway for the same `token_id`.
+- A PC agent is online and registered to gateway.
 
 When server-side headed captcha fails, the same user can still solve via their own PC agent through gateway.
 
@@ -200,7 +170,7 @@ In **System Settings -> Captcha**:
 On PC agent:
 
 - Connect to `wss://<agents-host>/ws/agents`
-- Register with matching `token_ids` that should serve jobs
+- Register with valid Keygen credentials
 
 ### End-to-end flow
 
@@ -217,15 +187,14 @@ On PC agent:
 
 - The API call may be slightly slower during fallback, but it should still complete.
 - Logs should show browser fallback and then remote solve success.
-- If no PC agent is online for that `token_id`, fallback fails and request returns captcha error.
+- If no PC agent is online, fallback fails and request returns captcha error.
 
 ### Example scenario
 
 Assume:
 
-- `token_id = 2`
 - Server-side headed browser (inside Flow2API host/container) fails due to local Chromium issue or reCAPTCHA evaluation failure
-- PC agent for `token_id=2` is online
+- A PC agent is online
 
 Result:
 
