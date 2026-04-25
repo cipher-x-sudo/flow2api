@@ -1,7 +1,7 @@
 """API routes for OpenAI-compatible and Gemini generateContent endpoints."""
 
-from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from dataclasses import dataclass, replace
+from typing import Any, Dict, List, Optional, Set, Tuple
 import base64
 import json
 import mimetypes
@@ -24,6 +24,7 @@ from ..core.models import (
     FlowProjectCreateRequest,
     GeminiContent,
     GeminiGenerateContentRequest,
+    Project,
 )
 from ..services.generation_handler import MODEL_CONFIG, GenerationHandler
 
@@ -82,6 +83,14 @@ class NormalizedGenerationRequest:
     prompt: str
     images: List[bytes]
     messages: Optional[List[ChatMessage]] = None
+    project_id: Optional[str] = None
+
+
+def _strip_optional_project_id(value: Optional[str]) -> Optional[str]:
+    if not value or not isinstance(value, str):
+        return None
+    s = value.strip()
+    return s or None
 
 
 def set_generation_handler(handler: GenerationHandler):
@@ -450,15 +459,19 @@ async def _normalize_openai_request(
             prompt=prompt,
             images=images,
             messages=request.messages,
+            project_id=_strip_optional_project_id(request.project_id),
         )
 
     if request.contents:
         gemini_request = GeminiGenerateContentRequest(
             contents=_coerce_gemini_contents(request.contents),
             generationConfig=request.generationConfig,
+            project_id=request.project_id,
         )
         normalized = await _normalize_gemini_request(request.model, gemini_request)
         normalized.messages = request.messages
+        if request.project_id is not None and normalized.project_id is None:
+            normalized.project_id = _strip_optional_project_id(request.project_id)
         return normalized
 
     raise HTTPException(status_code=400, detail="Messages or contents cannot be empty")
@@ -492,13 +505,12 @@ async def _normalize_gemini_request(
         model=resolved_model,
         prompt=prompt,
         images=images,
+        project_id=_strip_optional_project_id(request.project_id),
     )
 
 
 async def _collect_non_stream_result(
-    model: str,
-    prompt: str,
-    images: List[bytes],
+    normalized: NormalizedGenerationRequest,
     base_url_override: Optional[str] = None,
     allowed_token_ids: Optional[set[int]] = None,
     api_key_id: Optional[int] = None,
@@ -506,13 +518,14 @@ async def _collect_non_stream_result(
     handler = _ensure_generation_handler()
     result = None
     async for chunk in handler.handle_generation(
-        model=model,
-        prompt=prompt,
-        images=images if images else None,
+        model=normalized.model,
+        prompt=normalized.prompt,
+        images=normalized.images if normalized.images else None,
         stream=False,
         base_url_override=base_url_override,
         allowed_token_ids=allowed_token_ids,
         api_key_id=api_key_id,
+        requested_project_id=normalized.project_id,
     ):
         result = chunk
 
@@ -751,6 +764,7 @@ async def _iterate_openai_stream(
         base_url_override=base_url_override,
         allowed_token_ids=allowed_token_ids,
         api_key_id=api_key_id,
+        requested_project_id=normalized.project_id,
     ):
         if chunk.startswith("data: "):
             yield chunk
@@ -778,6 +792,7 @@ async def _iterate_gemini_stream(
         base_url_override=base_url_override,
         allowed_token_ids=allowed_token_ids,
         api_key_id=api_key_id,
+        requested_project_id=normalized.project_id,
     ):
         if chunk.startswith("data: "):
             payload_text = chunk[6:].strip()
@@ -821,6 +836,62 @@ def _resolve_allowed_token_ids(auth_ctx: AuthContext) -> Optional[set[int]]:
     return None
 
 
+async def _resolve_project_pin(
+    project_id: Optional[str],
+    auth_ctx: AuthContext,
+) -> Tuple[Optional[Set[int]], Optional[str]]:
+    """If project_id is set, validate DB row and return ({token_id}, canonical_id); else (None, None)."""
+    pid = _strip_optional_project_id(project_id)
+    if not pid:
+        return (None, None)
+    handler = _ensure_generation_handler()
+    if auth_ctx.key_id is not None:
+        proj = await handler.db.get_project_by_id(pid, auth_ctx.key_id)
+        if not proj:
+            raise HTTPException(
+                status_code=400,
+                detail="project_id not found for this API key",
+            )
+        tid = int(proj.token_id)
+        if tid not in auth_ctx.allowed_accounts:
+            raise HTTPException(
+                status_code=400,
+                detail="project_id is not assigned to this API key",
+            )
+        return ({tid}, pid)
+    proj = await handler.db.get_project_by_id(pid, None)
+    if not proj:
+        raise HTTPException(status_code=400, detail="project_id not found")
+    return ({int(proj.token_id)}, pid)
+
+
+def _require_managed_projects_read(auth_ctx: AuthContext) -> None:
+    """Managed keys: list/get projects if legacy or scopes include read/write wildcard."""
+    if auth_ctx.is_legacy:
+        return
+    if "*" in auth_ctx.scopes or "projects:read" in auth_ctx.scopes or "projects:write" in auth_ctx.scopes:
+        return
+    raise HTTPException(
+        status_code=403,
+        detail="Missing scope: allow '*', 'projects:read', or 'projects:write'",
+    )
+
+
+def _project_row_to_api_dict(p: Project) -> Dict[str, Any]:
+    """Serialize a Project model for JSON APIs."""
+    d = p.model_dump()
+    created = d.get("created_at")
+    if created is not None and hasattr(created, "isoformat"):
+        d["created_at"] = created.isoformat()
+    return {
+        "project_id": d.get("project_id"),
+        "project_name": d.get("project_name"),
+        "token_id": d.get("token_id"),
+        "is_active": bool(d.get("is_active", True)),
+        "created_at": d.get("created_at"),
+    }
+
+
 def _require_managed_projects_write(auth_ctx: AuthContext) -> None:
     """Managed keys need wildcard or projects:write to create Flow projects."""
     if auth_ctx.is_legacy:
@@ -831,6 +902,63 @@ def _require_managed_projects_write(auth_ctx: AuthContext) -> None:
         status_code=403,
         detail="Missing scope: allow '*' or add 'projects:write' for this key",
     )
+
+
+@router.get("/v1/projects")
+async def list_flow_projects(
+    account_id: Optional[int] = Query(None),
+    limit: int = Query(10, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    auth_ctx: AuthContext = Depends(verify_api_key_flexible),
+):
+    """List VideoFX projects visible to this managed API key (optional filter by account / token id)."""
+    if auth_ctx.key_id is None:
+        raise HTTPException(status_code=403, detail="Managed API key required")
+    _require_managed_projects_read(auth_ctx)
+    handler = _ensure_generation_handler()
+    kid = auth_ctx.key_id
+    limit_clean = max(1, min(int(limit), 100))
+    offset_clean = max(0, int(offset))
+    if account_id is not None:
+        aid = int(account_id)
+        if aid not in auth_ctx.allowed_accounts:
+            raise HTTPException(status_code=400, detail="account_id is not assigned to this API key")
+        total = await handler.db.count_projects_for_api_key_account(kid, aid)
+        projects = await handler.db.list_projects_for_api_key_account(
+            kid, aid, limit=limit_clean, offset=offset_clean
+        )
+    else:
+        total = await handler.db.count_projects_by_api_key(kid)
+        projects = await handler.db.list_projects_by_api_key(
+            kid, limit=limit_clean, offset=offset_clean
+        )
+    data = [_project_row_to_api_dict(p) for p in projects]
+    return {
+        "object": "list",
+        "data": data,
+        "total": total,
+        "limit": limit_clean,
+        "offset": offset_clean,
+    }
+
+
+@router.get("/v1/projects/{project_id}")
+async def get_flow_project(
+    project_id: str,
+    auth_ctx: AuthContext = Depends(verify_api_key_flexible),
+):
+    """Return one VideoFX project row if it belongs to this managed API key."""
+    if auth_ctx.key_id is None:
+        raise HTTPException(status_code=403, detail="Managed API key required")
+    _require_managed_projects_read(auth_ctx)
+    handler = _ensure_generation_handler()
+    pid = project_id.strip()
+    if not pid:
+        raise HTTPException(status_code=400, detail="project_id is required")
+    proj = await handler.db.get_project_by_id(pid, auth_ctx.key_id)
+    if not proj or int(proj.token_id) not in auth_ctx.allowed_accounts:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return {"object": "flow_project", **_project_row_to_api_dict(proj)}
 
 
 @router.post("/v1/projects")
@@ -962,7 +1090,11 @@ async def create_chat_completion(
             raise HTTPException(status_code=400, detail="Prompt cannot be empty")
 
         request_base_url = _get_request_base_url(raw_request)
-        allowed_token_ids = _resolve_allowed_token_ids(auth_ctx)
+        pin_set, pin_pid = await _resolve_project_pin(normalized.project_id, auth_ctx)
+        base_allowed = _resolve_allowed_token_ids(auth_ctx)
+        allowed_token_ids = pin_set if pin_set is not None else base_allowed
+        if pin_pid is not None:
+            normalized = replace(normalized, project_id=pin_pid)
 
         if request.stream:
             return StreamingResponse(
@@ -983,9 +1115,7 @@ async def create_chat_completion(
         payload = _enrich_payload_with_direct_url(
             _parse_handler_result(
                 await _collect_non_stream_result(
-                    normalized.model,
-                    normalized.prompt,
-                    normalized.images,
+                    normalized,
                     request_base_url,
                     allowed_token_ids,
                     api_key_id=auth_ctx.key_id,
@@ -1017,14 +1147,16 @@ async def generate_content(
             raise HTTPException(status_code=400, detail="Prompt cannot be empty")
 
         request_base_url = _get_request_base_url(raw_request)
-        allowed_token_ids = _resolve_allowed_token_ids(auth_ctx)
+        pin_set, pin_pid = await _resolve_project_pin(normalized.project_id, auth_ctx)
+        base_allowed = _resolve_allowed_token_ids(auth_ctx)
+        allowed_token_ids = pin_set if pin_set is not None else base_allowed
+        if pin_pid is not None:
+            normalized = replace(normalized, project_id=pin_pid)
 
         payload = _enrich_payload_with_direct_url(
             _parse_handler_result(
                 await _collect_non_stream_result(
-                    normalized.model,
-                    normalized.prompt,
-                    normalized.images,
+                    normalized,
                     request_base_url,
                     allowed_token_ids,
                     api_key_id=auth_ctx.key_id,
@@ -1068,7 +1200,11 @@ async def stream_generate_content(
             raise HTTPException(status_code=400, detail="Prompt cannot be empty")
 
         request_base_url = _get_request_base_url(raw_request)
-        allowed_token_ids = _resolve_allowed_token_ids(auth_ctx)
+        pin_set, pin_pid = await _resolve_project_pin(normalized.project_id, auth_ctx)
+        base_allowed = _resolve_allowed_token_ids(auth_ctx)
+        allowed_token_ids = pin_set if pin_set is not None else base_allowed
+        if pin_pid is not None:
+            normalized = replace(normalized, project_id=pin_pid)
 
         return StreamingResponse(
             _iterate_gemini_stream(

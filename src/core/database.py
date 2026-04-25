@@ -1343,6 +1343,39 @@ class Database:
             row = await cursor.fetchone()
             return int(row[0]) if row and row[0] is not None else 0
 
+    async def count_projects_for_api_key_account(self, api_key_id: int, token_id: int) -> int:
+        """Count active projects for one token scoped to a managed API key."""
+        async with self._connect() as db:
+            cursor = await db.execute(
+                """
+                SELECT COUNT(*) FROM projects
+                WHERE api_key_id = ? AND token_id = ? AND is_active = 1
+                """,
+                (api_key_id, token_id),
+            )
+            row = await cursor.fetchone()
+            return int(row[0]) if row and row[0] is not None else 0
+
+    async def list_projects_for_api_key_account(
+        self, api_key_id: int, token_id: int, limit: int = 100, offset: int = 0
+    ) -> List[Project]:
+        """Paginated active projects for a token under a managed API key."""
+        limit = max(1, min(int(limit), 100))
+        offset = max(0, int(offset))
+        async with self._connect() as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                """
+                SELECT * FROM projects
+                WHERE api_key_id = ? AND token_id = ? AND is_active = 1
+                ORDER BY datetime(created_at) DESC, id DESC
+                LIMIT ? OFFSET ?
+                """,
+                (api_key_id, token_id, limit, offset),
+            )
+            rows = await cursor.fetchall()
+            return [Project(**dict(row)) for row in rows]
+
     async def list_projects_by_api_key(
         self, api_key_id: int, limit: int = 10, offset: int = 0
     ) -> List[Project]:

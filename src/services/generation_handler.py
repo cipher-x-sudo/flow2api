@@ -780,6 +780,7 @@ class GenerationHandler:
         base_url_override: Optional[str] = None,
         allowed_token_ids: Optional[set[int]] = None,
         api_key_id: Optional[int] = None,
+        requested_project_id: Optional[str] = None,
     ) -> AsyncGenerator:
         """统一生成入口
 
@@ -824,6 +825,8 @@ class GenerationHandler:
             "prompt": prompt_for_log,
             "has_images": images is not None and len(images) > 0,
         }
+        if requested_project_id:
+            request_payload["project_id"] = requested_project_id
         debug_logger.log_info(f"[GENERATION] 开始生成 - 模型: {model}, 类型: {generation_type}, Prompt: {prompt[:50]}...")
 
         # 向用户展示开始信息
@@ -942,7 +945,19 @@ class GenerationHandler:
                 return
 
             ensure_project_started_at = time.time()
-            project_id = await self.token_manager.ensure_project_exists(token.id, api_key_id=api_key_id)
+            try:
+                project_id = await self.token_manager.ensure_project_exists(
+                    token.id,
+                    api_key_id=api_key_id,
+                    preferred_project_id=requested_project_id,
+                )
+            except ValueError as e:
+                err = str(e)
+                debug_logger.log_error(f"[GENERATION] {err}")
+                if stream:
+                    yield self._create_stream_chunk(f"❌ {err}\n")
+                yield self._create_error_response(err, status_code=400)
+                return
             perf_trace["ensure_project_ms"] = int((time.time() - ensure_project_started_at) * 1000)
             debug_logger.log_info(f"[GENERATION] Project ID: {project_id}")
             await self._update_request_log_progress(

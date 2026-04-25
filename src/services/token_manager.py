@@ -598,7 +598,12 @@ class TokenManager:
             debug_logger.log_error(f"[ST_REFRESH] Token {token_id}: 刷新 ST 失败 - {str(e)}")
             return None
 
-    async def ensure_project_exists(self, token_id: int, api_key_id: Optional[int] = None) -> str:
+    async def ensure_project_exists(
+        self,
+        token_id: int,
+        api_key_id: Optional[int] = None,
+        preferred_project_id: Optional[str] = None,
+    ) -> str:
         """Ensure a token has a pooled set of projects and return one in round-robin order."""
         project_lock = await self._get_token_lock(
             self._project_locks,
@@ -609,6 +614,24 @@ class TokenManager:
             token = await self.db.get_token(token_id)
             if not token:
                 raise ValueError("Token not found")
+
+            pref = (preferred_project_id or "").strip()
+            if pref:
+                projects_for_pref = await self.db.get_projects_by_token(token_id, api_key_id=api_key_id)
+                match = next(
+                    (p for p in projects_for_pref if p.is_active and p.project_id == pref),
+                    None,
+                )
+                if not match:
+                    raise ValueError(
+                        f"Project not found or inactive for this token: {pref}"
+                    )
+                await self.db.update_token(
+                    token_id,
+                    current_project_id=match.project_id,
+                    current_project_name=match.project_name,
+                )
+                return match.project_id
 
             projects = [
                 project

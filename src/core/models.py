@@ -280,6 +280,8 @@ class GeminiGenerateContentRequest(BaseModel):
     contents: List[GeminiContent]
     generationConfig: Optional[GenerationConfigParam] = None
     systemInstruction: Optional[GeminiContent] = None
+    # Flow2API: pin image/video generation to this VideoFX project (must belong to the API key).
+    project_id: Optional[str] = None
 
     model_config = ConfigDict(extra="allow")
 
@@ -306,5 +308,7 @@ class ChatCompletionRequest(BaseModel):
     # Gemini extension parameters (from extra_body or top-level)
     generationConfig: Optional[GenerationConfigParam] = None
     contents: Optional[List[Any]] = None  # Gemini native contents
+    # Flow2API: pin image/video generation to this VideoFX project (must belong to the API key).
+    project_id: Optional[str] = None
 
     model_config = ConfigDict(extra="allow")  # Allow extra fields like extra_body passthrough
