@@ -21,6 +21,23 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
+def _ws_reason(text: str, max_bytes: int = 120) -> str:
+    """WebSocket close reason must fit control frame limits (<=123 bytes in practice)."""
+    raw = (text or "").strip()
+    if not raw:
+        return "policy violation"
+    encoded = raw.encode("utf-8")
+    if len(encoded) <= max_bytes:
+        return raw
+    clipped = encoded[:max_bytes]
+    while clipped:
+        try:
+            return clipped.decode("utf-8", errors="strict").rstrip()
+        except UnicodeDecodeError:
+            clipped = clipped[:-1]
+    return "policy violation"
+
+
 def _parse_token_ids(raw_ids: Any) -> list[int]:
     try:
         token_ids = [int(x) for x in (raw_ids or [])]
@@ -81,13 +98,13 @@ async def ws_agents(websocket: WebSocket) -> None:
     except PermissionError as e:
         await websocket.close(
             code=http_status.WS_1008_POLICY_VIOLATION,
-            reason=str(e),
+            reason=_ws_reason(str(e)),
         )
         return
     except Exception as e:
         await websocket.close(
             code=http_status.WS_1008_POLICY_VIOLATION,
-            reason=f"agent auth failed: {e}",
+            reason=_ws_reason(f"agent auth failed: {e}"),
         )
         return
 
