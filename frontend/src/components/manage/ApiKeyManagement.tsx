@@ -10,7 +10,7 @@ import { Label } from "../ui/label"
 import { Switch } from "../ui/switch"
 import { Badge } from "../ui/badge"
 import { toast } from "sonner"
-import { Eye, Loader2, Pencil, Plus, RefreshCw, Trash2 } from "lucide-react"
+import { ChevronLeft, ChevronRight, Eye, Loader2, Pencil, Plus, RefreshCw, Trash2 } from "lucide-react"
 
 type TokenRow = { id: number; email?: string; is_active?: boolean }
 type ManagedApiKey = {
@@ -47,6 +47,8 @@ type AuditLog = {
 type LimitRow = { endpoint: string; rpm: string; rph: string; burst: string }
 type ScopeOption = { id: string; label: string; description: string }
 
+const AUDIT_PAGE_SIZE = 25
+
 const AVAILABLE_SCOPES: ScopeOption[] = [
   { id: "*", label: "Full access", description: "Allows all currently supported API actions." },
   { id: "models:read", label: "Read models", description: "Allows `/v1/models`, `/v1/models/aliases`, and Gemini model listing endpoints." },
@@ -61,6 +63,8 @@ export function ApiKeyManagement() {
   const [keys, setKeys] = useState<ManagedApiKey[]>([])
   const [tokens, setTokens] = useState<TokenRow[]>([])
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([])
+  const [auditPage, setAuditPage] = useState(0)
+  const [auditTotal, setAuditTotal] = useState(0)
 
   const [createOpen, setCreateOpen] = useState(false)
   const [editOpen, setEditOpen] = useState(false)
@@ -89,18 +93,23 @@ export function ApiKeyManagement() {
     if (!token) return
     setLoading(true)
     try {
+      const auditOffset = auditPage * AUDIT_PAGE_SIZE
       const [k, t, a] = await Promise.all([
         adminJson<{ success?: boolean; keys?: ManagedApiKey[] }>("/api/admin/managed-apikeys", token),
         adminJson<TokenRow[]>("/api/tokens", token),
-        adminJson<{ success?: boolean; logs?: AuditLog[] }>("/api/admin/managed-apikeys/audit?limit=80", token),
+        adminJson<{ success?: boolean; logs?: AuditLog[]; total?: number }>(
+          `/api/admin/managed-apikeys/audit?limit=${AUDIT_PAGE_SIZE}&offset=${auditOffset}`,
+          token
+        ),
       ])
       if (k.ok && k.data?.keys) setKeys(k.data.keys)
       if (t.ok && Array.isArray(t.data)) setTokens(t.data)
       if (a.ok && a.data?.logs) setAuditLogs(a.data.logs)
+      if (a.ok && typeof a.data?.total === "number") setAuditTotal(a.data.total)
     } finally {
       setLoading(false)
     }
-  }, [token])
+  }, [token, auditPage])
 
   useEffect(() => {
     const timeoutId = window.setTimeout(() => {
@@ -388,6 +397,37 @@ export function ApiKeyManagement() {
               )}
             </TableBody>
           </Table>
+          <div className="flex flex-wrap items-center justify-between gap-2 border-t px-4 py-2 text-xs text-muted-foreground">
+            <span>
+              {auditTotal === 0
+                ? "No entries"
+                : `Showing ${auditPage * AUDIT_PAGE_SIZE + 1}–${Math.min(auditPage * AUDIT_PAGE_SIZE + auditLogs.length, auditTotal)} of ${auditTotal}`}
+            </span>
+            <div className="flex items-center gap-1">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-8"
+                disabled={loading || auditPage <= 0}
+                onClick={() => setAuditPage((p) => Math.max(0, p - 1))}
+              >
+                <ChevronLeft className="h-4 w-4" />
+                Previous
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-8"
+                disabled={loading || (auditPage + 1) * AUDIT_PAGE_SIZE >= auditTotal}
+                onClick={() => setAuditPage((p) => p + 1)}
+              >
+                Next
+                <ChevronRight className="h-4 w-4" />
+              </Button>
+            </div>
+          </div>
         </CardContent>
       </Card>
 

@@ -1723,14 +1723,38 @@ class Database:
             )
             await db.commit()
 
+    async def count_request_logs(
+        self,
+        token_id: Optional[int] = None,
+        api_key_id: Optional[int] = None,
+    ) -> int:
+        """Count rows matching the same filters as get_logs."""
+        async with self._connect() as db:
+            if token_id is not None:
+                cursor = await db.execute(
+                    "SELECT COUNT(*) FROM request_logs WHERE token_id = ?",
+                    (token_id,),
+                )
+            elif api_key_id is not None:
+                cursor = await db.execute(
+                    "SELECT COUNT(*) FROM request_logs WHERE api_key_id = ?",
+                    (api_key_id,),
+                )
+            else:
+                cursor = await db.execute("SELECT COUNT(*) FROM request_logs")
+            row = await cursor.fetchone()
+            return int(row[0]) if row and row[0] is not None else 0
+
     async def get_logs(
         self,
         limit: int = 100,
+        offset: int = 0,
         token_id: Optional[int] = None,
         include_payload: bool = False,
         api_key_id: Optional[int] = None,
     ):
         """Get request logs with token info, optionally including payload fields"""
+        safe_offset = max(0, int(offset or 0))
         async with self._connect() as db:
             db.row_factory = aiosqlite.Row
             payload_columns = "rl.request_body, rl.response_body," if include_payload else ""
@@ -1763,8 +1787,8 @@ class Database:
                     LEFT JOIN tokens t ON rl.token_id = t.id
                     WHERE rl.token_id = ?
                     ORDER BY rl.created_at DESC
-                    LIMIT ?
-                """, (token_id, limit))
+                    LIMIT ? OFFSET ?
+                """, (token_id, limit, safe_offset))
             elif api_key_id is not None:
                 cursor = await db.execute(f"""
                     SELECT
@@ -1786,8 +1810,8 @@ class Database:
                     LEFT JOIN tokens t ON rl.token_id = t.id
                     WHERE rl.api_key_id = ?
                     ORDER BY rl.created_at DESC
-                    LIMIT ?
-                """, (api_key_id, limit))
+                    LIMIT ? OFFSET ?
+                """, (api_key_id, limit, safe_offset))
             else:
                 cursor = await db.execute(f"""
                     SELECT
@@ -1808,8 +1832,8 @@ class Database:
                     FROM request_logs rl
                     LEFT JOIN tokens t ON rl.token_id = t.id
                     ORDER BY rl.created_at DESC
-                    LIMIT ?
-                """, (limit,))
+                    LIMIT ? OFFSET ?
+                """, (limit, safe_offset))
 
             rows = await cursor.fetchall()
             return [dict(row) for row in rows]
@@ -2577,8 +2601,26 @@ class Database:
             await db.execute("DELETE FROM api_keys WHERE id = ?", (key_id,))
             await db.commit()
 
-    async def list_api_key_audit_logs(self, limit: int = 200, key_id: Optional[int] = None) -> List[Dict[str, Any]]:
-        safe_limit = max(1, min(int(limit or 200), 1000))
+    async def count_api_key_audit_logs(self, key_id: Optional[int] = None) -> int:
+        async with self._connect() as db:
+            if key_id is not None:
+                cursor = await db.execute(
+                    "SELECT COUNT(*) FROM api_key_audit_logs WHERE api_key_id = ?",
+                    (key_id,),
+                )
+            else:
+                cursor = await db.execute("SELECT COUNT(*) FROM api_key_audit_logs")
+            row = await cursor.fetchone()
+            return int(row[0]) if row and row[0] is not None else 0
+
+    async def list_api_key_audit_logs(
+        self,
+        limit: int = 200,
+        offset: int = 0,
+        key_id: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        safe_limit = max(1, min(int(limit or 200), 500))
+        safe_offset = max(0, int(offset or 0))
         async with self._connect() as db:
             db.row_factory = aiosqlite.Row
             if key_id is not None:
@@ -2600,9 +2642,9 @@ class Database:
                     LEFT JOIN api_keys k ON k.id = l.api_key_id
                     WHERE l.api_key_id = ?
                     ORDER BY l.created_at DESC
-                    LIMIT ?
+                    LIMIT ? OFFSET ?
                     """,
-                    (key_id, safe_limit),
+                    (key_id, safe_limit, safe_offset),
                 )
             else:
                 cursor = await db.execute(
@@ -2622,8 +2664,8 @@ class Database:
                     FROM api_key_audit_logs l
                     LEFT JOIN api_keys k ON k.id = l.api_key_id
                     ORDER BY l.created_at DESC
-                    LIMIT ?
+                    LIMIT ? OFFSET ?
                     """,
-                    (safe_limit,),
+                    (safe_limit, safe_offset),
                 )
             return [dict(row) for row in await cursor.fetchall()]

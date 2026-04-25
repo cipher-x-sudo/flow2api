@@ -34,6 +34,14 @@ export interface TokenRow {
   error_count?: number
 }
 
+/** Paginated list from GET /api/logs */
+export interface LogsListResponse {
+  logs: LogListItem[]
+  total: number
+  limit: number
+  offset: number
+}
+
 /** List item from GET /api/logs */
 export interface LogListItem {
   id: number

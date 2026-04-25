@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from "react"
 import { useAuth } from "../../contexts/AuthContext"
 import { adminFetch, adminJson } from "../../lib/adminApi"
-import type { LogDetail, LogListItem } from "../../types/admin"
+import type { LogDetail, LogListItem, LogsListResponse } from "../../types/admin"
 import { formatLogOutcomeRowClass, formatLogProgressField, logStatusPillClass, statusCodePillClass } from "./requestLogDetail"
 import { formatLogStatus, formatOutcome } from "./requestLogUi"
 import { LogDetailStatic } from "./LogDetailStatic"
@@ -10,13 +10,17 @@ import { Button } from "../ui/button"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../ui/table"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../ui/dialog"
 import { toast } from "sonner"
-import { RefreshCw, Trash2, Loader2 } from "lucide-react"
+import { ChevronLeft, ChevronRight, RefreshCw, Trash2, Loader2 } from "lucide-react"
 import { cn } from "@/lib/utils"
+
+const LOG_PAGE_SIZE = 50
 
 export function RequestLogs() {
   const { token } = useAuth()
   const [logs, setLogs] = useState<LogListItem[]>([])
   const [loading, setLoading] = useState(false)
+  const [page, setPage] = useState(0)
+  const [total, setTotal] = useState(0)
   const [detailOpen, setDetailOpen] = useState(false)
   const [detailLoading, setDetailLoading] = useState(false)
   const [detail, setDetail] = useState<LogDetail | null>(null)
@@ -25,16 +29,26 @@ export function RequestLogs() {
     if (!token) return
     setLoading(true)
     try {
-      const r = await adminFetch("/api/logs?limit=100", token)
+      const offset = page * LOG_PAGE_SIZE
+      const r = await adminFetch(`/api/logs?limit=${LOG_PAGE_SIZE}&offset=${offset}`, token)
       if (!r?.ok) throw new Error("fetch failed")
-      const data = (await r.json()) as LogListItem[]
-      setLogs(Array.isArray(data) ? data : [])
+      const data = (await r.json()) as LogsListResponse | LogListItem[]
+      if (Array.isArray(data)) {
+        setLogs(data)
+        setTotal(data.length)
+      } else if (data && Array.isArray(data.logs)) {
+        setLogs(data.logs)
+        setTotal(typeof data.total === "number" ? data.total : data.logs.length)
+      } else {
+        setLogs([])
+        setTotal(0)
+      }
     } catch {
       toast.error("Failed to load logs")
     } finally {
       setLoading(false)
     }
-  }, [token])
+  }, [token, page])
 
   useEffect(() => {
     queueMicrotask(() => {
@@ -52,6 +66,8 @@ export function RequestLogs() {
       if (d.success) {
         toast.success("Logs cleared")
         setLogs([])
+        setTotal(0)
+        setPage(0)
         setDetailOpen(false)
         setDetail(null)
       } else toast.error(d.message || "Failed to clear logs")
@@ -196,6 +212,37 @@ export function RequestLogs() {
               )}
             </TableBody>
           </Table>
+        </div>
+        <div className="flex flex-wrap items-center justify-between gap-2 border-t px-3 py-2 text-xs text-muted-foreground">
+          <span>
+            {total === 0
+              ? "No entries"
+              : `Showing ${page * LOG_PAGE_SIZE + 1}–${Math.min(page * LOG_PAGE_SIZE + logs.length, total)} of ${total}`}
+          </span>
+          <div className="flex items-center gap-1">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-8"
+              disabled={loading || page <= 0}
+              onClick={() => setPage((p) => Math.max(0, p - 1))}
+            >
+              <ChevronLeft className="h-4 w-4" />
+              Previous
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-8"
+              disabled={loading || (page + 1) * LOG_PAGE_SIZE >= total}
+              onClick={() => setPage((p) => p + 1)}
+            >
+              Next
+              <ChevronRight className="h-4 w-4" />
+            </Button>
+          </div>
         </div>
       </CardContent>
 

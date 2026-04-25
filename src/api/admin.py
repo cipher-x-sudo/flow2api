@@ -1406,12 +1406,15 @@ async def get_stats(token: str = Depends(verify_admin_token)):
 
 @router.get("/api/logs")
 async def get_logs(
-    limit: int = 100,
+    limit: int = 50,
+    offset: int = 0,
     token: str = Depends(verify_admin_token)
 ):
-    """Get lightweight request logs for list view"""
+    """Get lightweight request logs for list view (paginated)."""
     limit = max(1, min(limit, 100))
-    logs = await db.get_logs(limit=limit, include_payload=False)
+    offset = max(0, offset)
+    total = await db.count_request_logs()
+    logs = await db.get_logs(limit=limit, offset=offset, include_payload=False)
 
     result = []
     for log in logs:
@@ -1434,7 +1437,7 @@ async def get_logs(
             "updated_at": log.get("updated_at"),
             "error_summary": _extract_error_summary(log.get("response_body_excerpt")) if status_code is not None and status_code >= 400 else "",
         })
-    return result
+    return {"logs": result, "total": total, "limit": limit, "offset": offset}
 
 
 @router.get("/api/logs/{log_id}")
@@ -1581,12 +1584,16 @@ async def update_managed_api_key(
 @router.get("/api/admin/managed-apikeys/audit")
 async def list_managed_api_key_audit(
     key_id: Optional[int] = None,
-    limit: int = 200,
+    limit: int = 50,
+    offset: int = 0,
     token: str = Depends(verify_admin_token),
 ):
     """Must be registered before /managed-apikeys/{key_id} or 'audit' is parsed as key_id (422)."""
-    logs = await db.list_api_key_audit_logs(limit=limit, key_id=key_id)
-    return {"success": True, "logs": logs}
+    limit = max(1, min(limit, 200))
+    offset = max(0, offset)
+    total = await db.count_api_key_audit_logs(key_id=key_id)
+    logs = await db.list_api_key_audit_logs(limit=limit, offset=offset, key_id=key_id)
+    return {"success": True, "logs": logs, "total": total, "limit": limit, "offset": offset}
 
 
 @router.get("/api/admin/managed-apikeys/{key_id}")
