@@ -10,6 +10,16 @@ import { Loader2, CheckCircle2, XCircle, Copy } from "lucide-react"
 import { Link } from "react-router-dom"
 
 type GatewayAuthMode = "legacy" | "keygen" | "dual" | "unknown"
+type GatewayConnection = {
+  auth_method?: string
+  subject?: string
+  machine_id?: string
+  license_id?: string
+  account_id?: string
+  claimed_token_ids?: number[]
+  authorized_token_ids?: number[]
+  connected_at?: number
+}
 
 function toWssBase(publicBase: string): string {
   const t = publicBase.trim()
@@ -39,6 +49,8 @@ export function AgentGateway() {
   const [gatewayVerifyMode, setGatewayVerifyMode] = useState("")
   const [gatewayReachable, setGatewayReachable] = useState<boolean | null>(null)
   const [gatewayModeMsg, setGatewayModeMsg] = useState("")
+  const [connectionsLoading, setConnectionsLoading] = useState(false)
+  const [gatewayConnections, setGatewayConnections] = useState<GatewayConnection[]>([])
 
   useEffect(() => {
     if (!token) return
@@ -83,6 +95,15 @@ export function AgentGateway() {
         setGatewayReachable(null)
         setGatewayModeMsg("Gateway mode probe unavailable on this backend")
       }
+
+      try {
+        const conResp = await adminJson<Record<string, unknown>>("/api/agent-gateway/connections", token)
+        if (cancelled || !conResp.data) return
+        const items = Array.isArray(conResp.data.connections) ? conResp.data.connections : []
+        setGatewayConnections(items as GatewayConnection[])
+      } catch {
+        if (!cancelled) setGatewayConnections([])
+      }
     })()
     return () => {
       cancelled = true
@@ -96,6 +117,14 @@ export function AgentGateway() {
 
   const registerJson = useMemo(() => {
     if (gatewayMode === "keygen") {
+      if (gatewayVerifyMode === "introspection") {
+        return `{
+  "type": "register",
+  "agent_token": "<keygen-token>",
+  "agent_token_id": "<keygen-token-uuid>",
+  "token_ids": [1]
+}`
+      }
       return `{
   "type": "register",
   "agent_token": "<keygen-token>",
@@ -140,6 +169,21 @@ export function AgentGateway() {
       toast.success("Copied")
     } catch {
       toast.error("Copy failed")
+    }
+  }
+
+  const refreshConnections = async () => {
+    if (!token) return
+    setConnectionsLoading(true)
+    try {
+      const conResp = await adminJson<Record<string, unknown>>("/api/agent-gateway/connections", token)
+      const items = Array.isArray(conResp.data?.connections) ? conResp.data.connections : []
+      setGatewayConnections(items as GatewayConnection[])
+      toast.success("Connections refreshed")
+    } catch {
+      toast.error("Failed to refresh connections")
+    } finally {
+      setConnectionsLoading(false)
     }
   }
 
@@ -314,7 +358,14 @@ export function AgentGateway() {
           ) : null}
           {gatewayMode === "keygen" ? (
             <p className="text-xs text-muted-foreground">
-              Agent clients should send <code className="text-xs">agent_token</code>. Server must have
+              Agent clients should send <code className="text-xs">agent_token</code>
+              {gatewayVerifyMode === "introspection" ? (
+                <>
+                  {" "}
+                  + <code className="text-xs">agent_token_id</code>
+                </>
+              ) : null}
+              . Server must have
               <code className="text-xs"> KEYGEN_*</code> configured.
             </p>
           ) : null}
@@ -337,6 +388,60 @@ export function AgentGateway() {
               </p>
             </div>
           ) : null}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Connected agents</CardTitle>
+          <CardDescription>
+            Live sessions currently registered in gateway memory.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="flex items-center gap-2">
+            <Button type="button" variant="secondary" onClick={refreshConnections} disabled={connectionsLoading}>
+              {connectionsLoading ? (
+                <>
+                  <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
+                  Refreshing…
+                </>
+              ) : (
+                "Refresh"
+              )}
+            </Button>
+            <span className="text-xs text-muted-foreground">
+              {gatewayConnections.length} connected
+            </span>
+          </div>
+          {gatewayConnections.length === 0 ? (
+            <p className="text-xs text-muted-foreground">No agents connected.</p>
+          ) : (
+            <div className="space-y-2">
+              {gatewayConnections.map((c, idx) => (
+                <div key={`${c.subject || "unknown"}-${idx}`} className="rounded-md border p-2 text-xs space-y-1">
+                  <div>
+                    <strong>subject:</strong> {c.subject || "-"}
+                  </div>
+                  <div>
+                    <strong>auth:</strong> {c.auth_method || "-"}
+                  </div>
+                  <div>
+                    <strong>machine:</strong> {c.machine_id || "-"}
+                  </div>
+                  <div>
+                    <strong>license:</strong> {c.license_id || "-"}
+                  </div>
+                  <div>
+                    <strong>authorized token_ids:</strong>{" "}
+                    {Array.isArray(c.authorized_token_ids) && c.authorized_token_ids.length
+                      ? c.authorized_token_ids.join(", ")
+                      : "-"}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </CardContent>
       </Card>
 

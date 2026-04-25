@@ -180,9 +180,16 @@ Or in Keygen mode:
 {
   "type": "register",
   "agent_token": "<keygen-token>",
+  "agent_token_id": "<keygen-token-resource-uuid>",
   "token_ids": [1, 2, 3]
 }
 ```
+
+Notes for Keygen mode:
+
+- `KEYGEN_VERIFY_MODE=jwt`: `agent_token` is required; `agent_token_id` is optional.
+- `KEYGEN_VERIFY_MODE=introspection`: both `agent_token` and `agent_token_id` are required.
+- `agent_token_id` should be the Keygen token UUID (for license-token flows this is typically `licenseTokenId`).
 
 2. **Server → client (ack):**
 
@@ -253,6 +260,7 @@ Pydantic reference types: [`src/agent_gateway/schemas.py`](../src/agent_gateway/
 | `KEYGEN_PUBLIC_KEY` | Keygen public key (jwt mode). |
 | `KEYGEN_API_TOKEN` | Keygen API token (introspection mode). |
 | `KEYGEN_API_URL` | Keygen base URL (default `https://api.keygen.sh`). |
+| `KEYGEN_ACCOUNT` | Keygen account slug/UUID. Required for account-scoped introspection lookups. |
 | `KEYGEN_ISSUER` / `KEYGEN_AUDIENCE` | JWT claim checks for Keygen token verification. |
 | `AGENT_TOKEN_OWNERSHIP_JSON` | Ownership map JSON, e.g. `{"machine-1":[1,2],"license-abc":[3]}`; server intersects this with claimed token_ids. |
 | `SOLVE_TIMEOUT_SECONDS` | Max wait for a token (default 120). |

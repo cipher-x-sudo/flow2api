@@ -480,6 +480,32 @@ async def _probe_agent_gateway_mode(base_url: str) -> Dict[str, Any]:
     }
 
 
+async def _fetch_agent_gateway_connections(base_url: str, api_key: str) -> Dict[str, Any]:
+    normalized = _normalize_http_base_url(base_url)
+    endpoint = f"{normalized}/api/v1/agents"
+    status_code, response_payload, response_text = await _sync_json_http_request(
+        method="GET",
+        url=endpoint,
+        headers={"Authorization": f"Bearer {api_key}"},
+        payload=None,
+        timeout=8,
+    )
+    if status_code >= 400:
+        detail = ""
+        if isinstance(response_payload, dict):
+            detail = str(
+                response_payload.get("detail")
+                or response_payload.get("message")
+                or ""
+            ).strip()
+        if not detail:
+            detail = (response_text or "").strip()
+        raise RuntimeError(f"HTTP {status_code}{f': {detail}' if detail else ''}")
+    if not isinstance(response_payload, dict):
+        raise RuntimeError("agents 返回格式错误")
+    return response_payload
+
+
 def set_dependencies(tm: TokenManager, pm: ProxyManager, database: Database, cm: Optional[ConcurrencyManager] = None):
     """Set service instances"""
     global token_manager, proxy_manager, db, concurrency_manager
@@ -1856,6 +1882,54 @@ async def get_agent_gateway_mode(token: str = Depends(verify_admin_token)):
         "gateway_reachable": bool(probe.get("ok")),
         "base_url": base_url,
         "service": probe.get("service") or "",
+    }
+
+
+@router.get("/api/agent-gateway/connections")
+async def get_agent_gateway_connections(token: str = Depends(verify_admin_token)):
+    """Fetch currently connected agent sessions from configured gateway."""
+    captcha_config = await db.get_captcha_config()
+    base_url = (getattr(captcha_config, "remote_browser_base_url", "") or "").strip()
+    api_key = (getattr(captcha_config, "remote_browser_api_key", "") or "").strip()
+    if not base_url:
+        return {
+            "success": False,
+            "status": "not_configured",
+            "message": "remote_browser_base_url is not configured",
+            "connections": [],
+            "count": 0,
+            "base_url": "",
+        }
+    if not api_key:
+        return {
+            "success": False,
+            "status": "missing_api_key",
+            "message": "remote_browser_api_key is not configured",
+            "connections": [],
+            "count": 0,
+            "base_url": base_url,
+        }
+    try:
+        payload = await _fetch_agent_gateway_connections(base_url, api_key)
+    except Exception as e:
+        return {
+            "success": False,
+            "status": "unreachable",
+            "message": f"agent-gateway connections probe failed: {e}",
+            "connections": [],
+            "count": 0,
+            "base_url": base_url,
+        }
+
+    raw_agents = payload.get("agents")
+    connections = raw_agents if isinstance(raw_agents, list) else []
+    return {
+        "success": True,
+        "status": "reachable",
+        "message": "agent-gateway connections loaded",
+        "base_url": base_url,
+        "count": int(payload.get("count") or len(connections)),
+        "connections": connections,
     }
 
 

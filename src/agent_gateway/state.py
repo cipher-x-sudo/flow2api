@@ -7,6 +7,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 import uuid
 from dataclasses import dataclass
 from typing import Any, Optional
@@ -36,6 +37,7 @@ class AgentBinding:
     account_id: str = ""
     claimed_token_ids: tuple[int, ...] = ()
     authorized_token_ids: tuple[int, ...] = ()
+    connected_at: float = 0.0
 
 
 class OwnershipStore:
@@ -134,6 +136,7 @@ class AgentRegistry:
                 account_id=account_id,
                 claimed_token_ids=tuple(sorted({int(x) for x in claimed_token_ids})),
                 authorized_token_ids=tuple(sorted({int(x) for x in authorized_token_ids})),
+                connected_at=time.time(),
             )
             for tid in binding.authorized_token_ids:
                 self._by_token[tid] = binding
@@ -261,6 +264,25 @@ class AgentRegistry:
 
     def has_any_owner_for_token(self, token_id: int) -> bool:
         return self.ownership.has_any_owner_for_token(token_id)
+
+    async def list_agents(self) -> list[dict[str, Any]]:
+        async with self._lock:
+            out: list[dict[str, Any]] = []
+            for binding in self._ws_binding.values():
+                out.append(
+                    {
+                        "auth_method": binding.auth_method,
+                        "subject": binding.subject,
+                        "machine_id": binding.machine_id,
+                        "license_id": binding.license_id,
+                        "account_id": binding.account_id,
+                        "claimed_token_ids": list(binding.claimed_token_ids),
+                        "authorized_token_ids": list(binding.authorized_token_ids),
+                        "connected_at": binding.connected_at,
+                    }
+                )
+            out.sort(key=lambda item: float(item.get("connected_at") or 0.0), reverse=True)
+            return out
 
 
 registry = AgentRegistry()

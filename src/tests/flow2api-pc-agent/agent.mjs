@@ -130,7 +130,7 @@ const FILE_CONFIG = {
   // Keygen-derived agent token (jwt/introspection token)
   agentToken: "activ-2ce0a6dfe86dff499bd8317eda049532v3",
   // Keygen token resource id (UUID). Required for introspection mode.
-  agentTokenId: "",
+  agentTokenId: "45dc3792-55b4-4f57-a5ca-ac9f80bf4560",
   // Optional machine/license hint (server may ignore; useful for debugging/audit trails).
   agentId: "",
   tokenIds: [1],

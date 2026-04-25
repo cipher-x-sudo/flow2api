@@ -13,7 +13,7 @@ This guide explains how a PC agent connects to the gateway WebSocket and exchang
 Gateway supports `GATEWAY_AGENT_AUTH_MODE`:
 
 - `legacy`: requires `device_token`
-- `keygen`: requires `agent_token`
+- `keygen`: requires `agent_token` (and in introspection mode also `agent_token_id`)
 - `dual`: accepts either (migration mode)
 
 Configure in gateway env:
@@ -42,6 +42,7 @@ The first message after WebSocket connect must be JSON with `type: "register"`.
 {
   "type": "register",
   "agent_token": "<keygen-token>",
+  "agent_token_id": "<keygen-token-resource-uuid>",
   "token_ids": [1, 2, 3]
 }
 ```
@@ -51,6 +52,7 @@ Notes:
 - `token_ids` is a **hint** from client.
 - Server intersects this with policy from `AGENT_TOKEN_OWNERSHIP_JSON`.
 - If result is empty, connection is rejected with close reason `no authorized token_ids for this agent`.
+- In `KEYGEN_VERIFY_MODE=introspection`, `agent_token_id` is required. Use the Keygen token UUID (e.g. `licenseTokenId`).
 
 ## 4) Registration response
 
@@ -115,6 +117,7 @@ Common close reasons from gateway:
 - `expected JSON`
 - `legacy mode requires device_token`
 - `agent_token required`
+- `agent_token_id required in introspection mode`
 - `invalid device token`
 - `agent auth failed: ...`
 - `token_ids must be a list of integers`
@@ -142,6 +145,7 @@ Lookup behavior:
 
 - Connect to `wss://<host>/ws/agents`
 - Send `register` as first frame
+- In introspection mode, include both `agent_token` and `agent_token_id`
 - Wait for `registered`
 - Keep socket alive and read messages continuously
 - On each `solve_job`, respond with `solve_result` or `solve_error`

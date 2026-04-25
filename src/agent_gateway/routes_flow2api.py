@@ -90,6 +90,18 @@ async def api_v1_prefill(
     return {"ok": True}
 
 
+@router.get("/api/v1/agents")
+async def api_v1_agents(
+    _auth: str = Depends(require_flow2api_bearer),
+) -> dict[str, Any]:
+    agents = await registry.list_agents()
+    return {
+        "ok": True,
+        "count": len(agents),
+        "agents": agents,
+    }
+
+
 @router.post("/api/v1/sessions/{session_id}/finish")
 async def api_v1_session_finish(
     session_id: str = Path(...),
