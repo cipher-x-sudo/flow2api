@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo } from "react"
 import { useAuth } from "@/contexts/AuthContext"
-import { adminJson } from "@/lib/adminApi"
+import { adminFetch, adminJson } from "@/lib/adminApi"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -26,9 +26,13 @@ function toWssBase(publicBase: string): string {
 export function AgentGateway() {
   const { token } = useAuth()
   const [captchaMethod, setCaptchaMethod] = useState<string>("")
+  const [captchaConfigRaw, setCaptchaConfigRaw] = useState<Record<string, unknown> | null>(null)
   const [remoteBase, setRemoteBase] = useState("")
+  const [remoteApiKey, setRemoteApiKey] = useState("")
+  const [remoteTimeout, setRemoteTimeout] = useState(60)
   const [publicAgentUrl, setPublicAgentUrl] = useState("")
   const [captchaLoaded, setCaptchaLoaded] = useState(false)
+  const [savingRemoteConfig, setSavingRemoteConfig] = useState(false)
   const [healthStatus, setHealthStatus] = useState<"idle" | "loading" | "ok" | "err">("idle")
   const [healthBody, setHealthBody] = useState<string>("")
   const [gatewayMode, setGatewayMode] = useState<GatewayAuthMode>("unknown")
@@ -40,18 +44,27 @@ export function AgentGateway() {
     if (!token) return
     let cancelled = false
     ;(async () => {
-      const [captchaResp, modeResp] = await Promise.all([
-        adminJson<Record<string, unknown>>("/api/captcha/config", token),
-        adminJson<Record<string, unknown>>("/api/agent-gateway/mode", token),
-      ])
-      if (cancelled) return
-      if (captchaResp.ok && captchaResp.data) {
-        const m = captchaResp.data.captcha_method
-        setCaptchaMethod(typeof m === "string" ? m : "")
-        const rb = captchaResp.data.remote_browser_base_url
-        setRemoteBase(typeof rb === "string" ? rb : "")
+      try {
+        const captchaResp = await adminJson<Record<string, unknown>>("/api/captcha/config", token)
+        if (!cancelled && captchaResp.ok && captchaResp.data) {
+          setCaptchaConfigRaw(captchaResp.data)
+          const m = captchaResp.data.captcha_method
+          setCaptchaMethod(typeof m === "string" ? m : "")
+          const rb = captchaResp.data.remote_browser_base_url
+          setRemoteBase(typeof rb === "string" ? rb : "")
+          const rk = captchaResp.data.remote_browser_api_key
+          setRemoteApiKey(typeof rk === "string" ? rk : "")
+          const rt = Number(captchaResp.data.remote_browser_timeout ?? 60)
+          setRemoteTimeout(Number.isFinite(rt) ? rt : 60)
+        }
+      } finally {
+        if (!cancelled) setCaptchaLoaded(true)
       }
-      if (modeResp.data) {
+
+      // Keep mode probe independent so captcha fields still populate even if probe fails.
+      try {
+        const modeResp = await adminJson<Record<string, unknown>>("/api/agent-gateway/mode", token)
+        if (cancelled || !modeResp.data) return
         const mode = String(modeResp.data.agent_auth_mode || "unknown").toLowerCase()
         const safeMode: GatewayAuthMode =
           mode === "legacy" || mode === "keygen" || mode === "dual" ? mode : "unknown"
@@ -63,8 +76,13 @@ export function AgentGateway() {
           setGatewayReachable(null)
         }
         setGatewayModeMsg(String(modeResp.data.message || ""))
+      } catch {
+        if (cancelled) return
+        setGatewayMode("unknown")
+        setGatewayVerifyMode("")
+        setGatewayReachable(null)
+        setGatewayModeMsg("Gateway mode probe unavailable on this backend")
       }
-      setCaptchaLoaded(true)
     })()
     return () => {
       cancelled = true
@@ -122,6 +140,49 @@ export function AgentGateway() {
       toast.success("Copied")
     } catch {
       toast.error("Copy failed")
+    }
+  }
+
+  const saveRemoteGatewayConfig = async () => {
+    if (!token) return
+    if (!captchaConfigRaw) {
+      toast.error("Captcha config not loaded yet")
+      return
+    }
+    setSavingRemoteConfig(true)
+    try {
+      const payload: Record<string, unknown> = {
+        ...captchaConfigRaw,
+        captcha_method: String(captchaConfigRaw.captcha_method || "browser"),
+        remote_browser_base_url: remoteBase.trim(),
+        remote_browser_api_key: remoteApiKey.trim(),
+        remote_browser_timeout: Math.max(5, Number(remoteTimeout) || 60),
+      }
+      const res = await adminFetch("/api/captcha/config", token, {
+        method: "POST",
+        body: JSON.stringify(payload),
+      })
+      if (!res) return
+      const body = await res.json()
+      if (!body?.success) {
+        toast.error(String(body?.message || body?.detail || "Save failed"))
+        return
+      }
+      toast.success("Remote gateway config saved")
+      setCaptchaConfigRaw((prev) =>
+        prev
+          ? {
+              ...prev,
+              remote_browser_base_url: payload.remote_browser_base_url,
+              remote_browser_api_key: payload.remote_browser_api_key,
+              remote_browser_timeout: payload.remote_browser_timeout,
+            }
+          : prev
+      )
+    } catch {
+      toast.error("Failed to save remote gateway config")
+    } finally {
+      setSavingRemoteConfig(false)
     }
   }
 
@@ -190,15 +251,42 @@ export function AgentGateway() {
         <CardHeader>
           <CardTitle>Flow2API → gateway (HTTP)</CardTitle>
           <CardDescription>
-            Value from <strong>System settings</strong> (remote browser). Inside Docker this is usually{" "}
+            Uses the same captcha config values as <strong>System settings</strong>. Inside Docker this is usually{" "}
             <code className="text-xs">http://agent-gateway:9080</code>.
           </CardDescription>
         </CardHeader>
-        <CardContent className="space-y-2">
+        <CardContent className="space-y-3">
+          <div className="space-y-2">
+            <Label htmlFor="ag-remote-base">Remote base URL</Label>
+            <Input
+              id="ag-remote-base"
+              placeholder="http://agent-gateway:9080"
+              value={remoteBase}
+              onChange={(e) => setRemoteBase(e.target.value)}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="ag-remote-key">API key</Label>
+            <Input
+              id="ag-remote-key"
+              value={remoteApiKey}
+              onChange={(e) => setRemoteApiKey(e.target.value)}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="ag-remote-timeout">Timeout (s)</Label>
+            <Input
+              id="ag-remote-timeout"
+              type="number"
+              min={5}
+              value={remoteTimeout}
+              onChange={(e) => setRemoteTimeout(parseInt(e.target.value, 10) || 60)}
+            />
+          </div>
           <div className="flex flex-wrap items-center gap-2">
-            <code className="text-sm break-all bg-muted px-2 py-1 rounded flex-1 min-w-0">
-              {remoteBase || "— not configured —"}
-            </code>
+            <Button type="button" onClick={saveRemoteGatewayConfig} disabled={savingRemoteConfig}>
+              {savingRemoteConfig ? "Saving…" : "Save gateway config"}
+            </Button>
             {remoteBase ? (
               <Button type="button" variant="outline" size="sm" onClick={() => copy(remoteBase)}>
                 <Copy className="h-3.5 w-3.5" />
