@@ -11,6 +11,7 @@ from typing import Any
 
 from fastapi import APIRouter, WebSocket
 from fastapi import status as http_status
+from starlette.websockets import WebSocketDisconnect
 
 from .auth_keygen import verify_agent_token
 from .config import load_settings
@@ -186,6 +187,8 @@ async def ws_agents(websocket: WebSocket) -> None:
                 await websocket.send_json(
                     {"type": "error", "detail": f"unknown type {mtype!r}"}
                 )
+    except WebSocketDisconnect as e:
+        logger.info("ws agent disconnected code=%s reason=%s", e.code, e.reason or "")
     except Exception:
         logger.exception("ws agent loop")
     finally:

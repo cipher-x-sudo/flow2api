@@ -47,9 +47,15 @@ async def api_v1_solve(
             timeout=float(s.solve_timeout_seconds),
         )
     except LookupError:
+        connected_ids = await registry.connected_token_ids()
+        detail = f"no agent connected for token_id={int(token_id)}"
+        if connected_ids:
+            detail += f"; connected_token_ids={connected_ids}"
+        else:
+            detail += "; connected_token_ids=[]"
         raise HTTPException(
             status_code=503,
-            detail="no agent connected for token_id",
+            detail=detail,
         ) from None
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e

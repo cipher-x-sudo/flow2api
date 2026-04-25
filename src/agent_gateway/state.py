@@ -284,5 +284,9 @@ class AgentRegistry:
             out.sort(key=lambda item: float(item.get("connected_at") or 0.0), reverse=True)
             return out
 
+    async def connected_token_ids(self) -> list[int]:
+        async with self._lock:
+            return sorted(self._by_token.keys())
+
 
 registry = AgentRegistry()
