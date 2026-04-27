@@ -1298,6 +1298,7 @@ class Database:
         """Delete token and related data"""
         async with self._connect(write=True) as db:
             await db.execute("UPDATE request_logs SET token_id = NULL WHERE token_id = ?", (token_id,))
+            await db.execute("UPDATE cache_files SET token_id = NULL WHERE token_id = ?", (token_id,))
             await db.execute("DELETE FROM tasks WHERE token_id = ?", (token_id,))
             await db.execute("DELETE FROM token_stats WHERE token_id = ?", (token_id,))
             await db.execute("DELETE FROM projects WHERE token_id = ?", (token_id,))
