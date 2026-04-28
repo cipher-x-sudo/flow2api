@@ -1117,12 +1117,13 @@ async def create_flow_project(
         date_time = f"{month} {now.strftime('%d %Y %I:%M %p')}".replace("AM", "am").replace("PM", "pm")
         title = f"{label} {date_time}"
     created_projects = []
+    should_set_as_current = True if body.account_id is None else bool(body.set_as_current)
     try:
         for account_id in target_accounts:
             project = await handler.token_manager.create_project_for_token(
                 account_id,
                 title=title,
-                set_as_current=bool(body.set_as_current),
+                set_as_current=should_set_as_current,
                 api_key_id=auth_ctx.key_id,
             )
             created_projects.append(project)
@@ -1138,7 +1139,7 @@ async def create_flow_project(
             "project_id": project.project_id,
             "project_name": project.project_name,
             "token_id": project.token_id,
-            "set_as_current": body.set_as_current,
+            "set_as_current": should_set_as_current,
         }
 
     return {
@@ -1149,7 +1150,7 @@ async def create_flow_project(
                 "project_id": project.project_id,
                 "project_name": project.project_name,
                 "token_id": project.token_id,
-                "set_as_current": body.set_as_current,
+                "set_as_current": should_set_as_current,
             }
             for project in created_projects
         ],
