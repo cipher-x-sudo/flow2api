@@ -1257,8 +1257,9 @@ async def create_flow_project(
             f"[PROJECT] 跳过不存在的已分配账号: {missing_target_accounts}"
         )
 
-    try:
-        for account_id in existing_target_accounts:
+    failed_accounts: List[Dict[str, Any]] = []
+    for account_id in existing_target_accounts:
+        try:
             project = await handler.token_manager.create_project_for_token(
                 account_id,
                 title=title,
@@ -1266,10 +1267,29 @@ async def create_flow_project(
                 api_key_id=auth_ctx.key_id,
             )
             created_projects.append(project)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Create project failed: {str(e)}")
+        except ValueError as e:
+            if body.account_id is not None:
+                raise HTTPException(status_code=400, detail=str(e))
+            failed_accounts.append({"account_id": account_id, "error": str(e)})
+            debug_logger.log_warning(
+                f"[PROJECT] 批量创建跳过账号 {account_id}: {str(e)}"
+            )
+        except Exception as e:
+            if body.account_id is not None:
+                raise HTTPException(status_code=500, detail=f"Create project failed: {str(e)}")
+            failed_accounts.append({"account_id": account_id, "error": str(e)})
+            debug_logger.log_warning(
+                f"[PROJECT] 批量创建跳过账号 {account_id}: {str(e)}"
+            )
+
+    if not created_projects:
+        if failed_accounts:
+            first_error = failed_accounts[0].get("error") or "unknown error"
+            raise HTTPException(
+                status_code=500,
+                detail=f"Create project failed: {first_error}",
+            )
+        raise HTTPException(status_code=500, detail="Create project failed: no projects created")
 
     if body.account_id is not None:
         project = created_projects[0]
@@ -1294,6 +1314,7 @@ async def create_flow_project(
             for project in created_projects
         ],
         "total": len(created_projects),
+        "failed_accounts": failed_accounts,
     }
 
 
