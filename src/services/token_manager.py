@@ -582,49 +582,79 @@ class TokenManager:
         """
         try:
             from ..core.config import config
+            captcha_mode = str(config.captcha_method or "").strip()
 
             if not token.current_project_id:
                 debug_logger.log_warning(f"[ST_REFRESH] Token {token_id} 没有 project_id，无法刷新 ST")
                 return None
 
             debug_logger.log_info(
-                f"[ST_REFRESH] Token {token_id}: 尝试通过浏览器刷新 ST "
-                f"(mode={config.captcha_method}, force_headed_browser=True)..."
+                f"[ST_REFRESH] Token {token_id}: 尝试通过浏览器刷新 ST (mode={captcha_mode})..."
             )
 
-            # Force headed-browser refresh path for AT fallback ST refresh.
+            refresh_timeout_seconds = 45.0
+
+            async def _persist_if_new(candidate_st: Optional[str], source_label: str) -> Optional[str]:
+                if not candidate_st:
+                    return None
+                if candidate_st == token.st:
+                    debug_logger.log_warning(
+                        f"[ST_REFRESH] Token {token_id}: 从 {source_label} 获取到的 ST 与原 ST 相同，"
+                        "可能上游会话未续期或登录已失效"
+                    )
+                    return None
+                await self.db.update_token(token_id, st=candidate_st)
+                debug_logger.log_info(
+                    f"[ST_REFRESH] Token {token_id}: ST 已自动更新 (source={source_label}, mode={captcha_mode})"
+                )
+                return candidate_st
+
+            # 1) Always try local headed-browser refresh first.
             from .browser_captcha import BrowserCaptchaService
             service = await BrowserCaptchaService.get_instance(self.db)
-            # Headed-browser mode supports token-level proxy resolution during ST refresh.
             refresh_kwargs = {"token_id": token_id}
 
-            refresh_timeout_seconds = 45.0
             try:
-                new_st = await asyncio.wait_for(
+                local_st = await asyncio.wait_for(
                     service.refresh_session_token(token.current_project_id, **refresh_kwargs),
                     timeout=refresh_timeout_seconds,
                 )
             except asyncio.TimeoutError:
                 debug_logger.log_error(
-                    f"[ST_REFRESH] Token {token_id}: 刷新 ST 超时 ({refresh_timeout_seconds:.0f}s)"
+                    f"[ST_REFRESH] Token {token_id}: 本地浏览器刷新 ST 超时 ({refresh_timeout_seconds:.0f}s)"
                 )
-                return None
-            if new_st and new_st != token.st:
-                # 更新数据库中的 ST
-                await self.db.update_token(token_id, st=new_st)
-                debug_logger.log_info(
-                    f"[ST_REFRESH] Token {token_id}: ST 已自动更新 (mode={config.captcha_method})"
-                )
-                return new_st
-            elif new_st == token.st:
+                local_st = None
+            except Exception as local_err:
                 debug_logger.log_warning(
-                    f"[ST_REFRESH] Token {token_id}: 获取到的 ST 与原 ST 相同 (mode={config.captcha_method})，"
-                    "可能上游会话未续期或登录已失效"
+                    f"[ST_REFRESH] Token {token_id}: 本地浏览器刷新 ST 失败: {local_err}"
                 )
-                return None
-            else:
-                debug_logger.log_warning(f"[ST_REFRESH] Token {token_id}: 无法获取新 ST")
-                return None
+                local_st = None
+
+            persisted_local = await _persist_if_new(local_st, "local_headed")
+            if persisted_local:
+                return persisted_local
+
+            # 2) Fallback to remote browser gateway when available.
+            try:
+                remote_st = await self.flow_client.refresh_session_token_remote_browser(
+                    token.current_project_id,
+                    token_id=token_id,
+                    timeout_override=int(refresh_timeout_seconds),
+                )
+            except Exception as remote_err:
+                debug_logger.log_warning(
+                    f"[ST_REFRESH] Token {token_id}: gateway 刷新 ST 失败: {remote_err}"
+                )
+                remote_st = None
+
+            persisted_remote = await _persist_if_new(remote_st, "gateway_headed")
+            if persisted_remote:
+                return persisted_remote
+
+            debug_logger.log_warning(
+                f"[ST_REFRESH] Token {token_id}: 本地与 gateway 刷新 ST 均失败 (mode={captcha_mode})"
+            )
+            return None
 
         except Exception as e:
             debug_logger.log_error(f"[ST_REFRESH] Token {token_id}: 刷新 ST 失败 - {str(e)}")

@@ -2390,6 +2390,34 @@ class FlowClient:
 
         return payload
 
+    async def refresh_session_token_remote_browser(
+        self,
+        project_id: str,
+        token_id: Optional[int] = None,
+        timeout_override: Optional[int] = None,
+    ) -> str:
+        """Refresh session token via remote_browser gateway/agents."""
+        normalized_project = str(project_id or "").strip()
+        if not normalized_project:
+            raise RuntimeError("project_id is required for remote ST refresh")
+
+        payload: Dict[str, Any] = {
+            "project_id": normalized_project,
+        }
+        if token_id is not None:
+            payload["token_id"] = int(token_id)
+
+        response = await self._call_remote_browser_service(
+            method="POST",
+            path="/api/v1/session-token/refresh",
+            json_data=payload,
+            timeout_override=timeout_override or max(12, min(60, int(config.remote_browser_timeout or 60))),
+        )
+        session_token = str(response.get("session_token") or "").strip()
+        if not session_token:
+            raise RuntimeError("remote_browser 返回缺少 session_token")
+        return session_token
+
     async def prefill_remote_browser_pool(
         self,
         project_id: str,

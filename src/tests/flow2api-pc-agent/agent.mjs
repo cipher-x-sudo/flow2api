@@ -233,6 +233,32 @@ async function runRecaptchaSolve(_job) {
   }
 }
 
+/**
+ * @param {{ projectId: string }} _job
+ */
+async function runSessionTokenRefresh(_job) {
+  const context = await ensureContext();
+  const page = await context.newPage();
+  const pageUrl = BROWSER_CAPTCHA_DEFAULT_PAGE_URL;
+  try {
+    await page.goto(pageUrl, { waitUntil: "domcontentloaded", timeout: 60_000 });
+    await page.waitForTimeout(2_000);
+    const cookies = await context.cookies();
+    const matched = cookies.find((item) => item && item.name === "__Secure-next-auth.session-token");
+    const sessionToken = String((matched && matched.value) || "").trim();
+    if (!sessionToken) {
+      throw new Error("missing __Secure-next-auth.session-token cookie");
+    }
+    return { sessionToken };
+  } finally {
+    try {
+      await page.close();
+    } catch {
+      // ignore
+    }
+  }
+}
+
 function sendJson(ws, obj) {
   if (ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify(obj));
@@ -318,6 +344,27 @@ function main() {
           const err = e instanceof Error ? e.message : String(e);
           sendJson(ws, { type: "solve_error", job_id: jobId, error: err });
           console.error("solve_error", jobId, err);
+        }
+      });
+    }
+    if (msg.type === "session_refresh_job") {
+      const jobId = msg.job_id;
+      const projectId = String(msg.project_id || "");
+      console.log("session_refresh_job", { jobId, projectId });
+      void enqueue(async () => {
+        try {
+          const { sessionToken } = await runSessionTokenRefresh({ projectId });
+          sendJson(ws, {
+            type: "session_refresh_result",
+            job_id: jobId,
+            session_token: sessionToken,
+            session_id: crypto.randomUUID(),
+          });
+          console.log("→ session_refresh_result", jobId);
+        } catch (e) {
+          const err = e instanceof Error ? e.message : String(e);
+          sendJson(ws, { type: "session_refresh_error", job_id: jobId, error: err });
+          console.error("session_refresh_error", jobId, err);
         }
       });
     }

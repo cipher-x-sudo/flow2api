@@ -141,9 +141,25 @@ async def ws_agents(websocket: WebSocket) -> None:
                         "fingerprint": msg.get("fingerprint"),
                     },
                 )
+            elif mtype == "session_refresh_result":
+                job_id = msg.get("job_id")
+                if not job_id:
+                    continue
+                await registry.complete_job(
+                    str(job_id),
+                    {
+                        "session_token": msg.get("session_token"),
+                        "session_id": msg.get("session_id"),
+                    },
+                )
             elif mtype == "solve_error":
                 job_id = msg.get("job_id")
                 err = str(msg.get("error") or "agent_error")
+                if job_id:
+                    await registry.fail_job(str(job_id), err)
+            elif mtype == "session_refresh_error":
+                job_id = msg.get("job_id")
+                err = str(msg.get("error") or "agent_session_refresh_error")
                 if job_id:
                     await registry.fail_job(str(job_id), err)
             else:
