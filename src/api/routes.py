@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 import base64
 import json
 import mimetypes
+import random
 import re
 from urllib.parse import parse_qs, quote, urlparse
 
@@ -18,6 +19,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from ..core.auth import verify_api_key_flexible
 from ..core.api_key_manager import AuthContext
 from ..core.logger import debug_logger
+from ..core.account_tiers import normalize_user_paygate_tier, supports_model_for_tier
 from ..core.model_resolver import get_base_model_aliases, resolve_model_name
 from ..core.models import (
     ChatCompletionRequest,
@@ -712,6 +714,28 @@ def _enrich_payload_with_direct_url(payload: Dict[str, Any]) -> Dict[str, Any]:
     return payload
 
 
+def _with_projectid(payload: Dict[str, Any], project_id: Optional[str]) -> Dict[str, Any]:
+    if project_id and not payload.get("projectid"):
+        payload["projectid"] = project_id
+    return payload
+
+
+def _inject_projectid_into_openai_sse_chunk(
+    chunk: str,
+    project_id: Optional[str],
+) -> str:
+    if not project_id or not chunk.startswith("data: "):
+        return chunk
+    payload_text = chunk[6:].strip()
+    if payload_text == "[DONE]":
+        return chunk
+    payload = _parse_handler_result(payload_text)
+    if not isinstance(payload, dict):
+        return chunk
+    payload = _with_projectid(payload, project_id)
+    return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+
 async def _build_image_parts_from_uri(
     uri: str,
     api_key_id: Optional[int] = None,
@@ -800,9 +824,10 @@ async def _build_gemini_success_payload(
     response_model: str,
     api_key_id: Optional[int] = None,
     allowed_token_ids: Optional[Set[int]] = None,
+    project_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     output = _extract_openai_message_content(payload)
-    return {
+    response = {
         "candidates": [
             {
                 "content": {
@@ -819,6 +844,7 @@ async def _build_gemini_success_payload(
         ],
         "modelVersion": response_model,
     }
+    return _with_projectid(response, project_id)
 
 
 def _normalize_finish_reason(reason: Optional[str]) -> Optional[str]:
@@ -837,6 +863,7 @@ async def _convert_openai_stream_chunk_to_gemini_event(
     response_model: str,
     api_key_id: Optional[int] = None,
     allowed_token_ids: Optional[Set[int]] = None,
+    project_id: Optional[str] = None,
 ) -> Optional[str]:
     choices = payload.get("choices", [])
     if not choices:
@@ -867,6 +894,7 @@ async def _convert_openai_stream_chunk_to_gemini_event(
         "candidates": [candidate],
         "modelVersion": response_model,
     }
+    chunk = _with_projectid(chunk, project_id)
     return f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
 
 
@@ -875,6 +903,7 @@ async def _iterate_openai_stream(
     base_url_override: Optional[str] = None,
     allowed_token_ids: Optional[set[int]] = None,
     api_key_id: Optional[int] = None,
+    project_id: Optional[str] = None,
 ):
     handler = _ensure_generation_handler()
     async for chunk in handler.handle_generation(
@@ -888,10 +917,11 @@ async def _iterate_openai_stream(
         requested_project_id=normalized.project_id,
     ):
         if chunk.startswith("data: "):
-            yield chunk
+            yield _inject_projectid_into_openai_sse_chunk(chunk, project_id)
             continue
 
         payload = _parse_handler_result(chunk)
+        payload = _with_projectid(payload, project_id)
         yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
     yield "data: [DONE]\n\n"
@@ -903,6 +933,7 @@ async def _iterate_gemini_stream(
     base_url_override: Optional[str] = None,
     allowed_token_ids: Optional[set[int]] = None,
     api_key_id: Optional[int] = None,
+    project_id: Optional[str] = None,
 ):
     handler = _ensure_generation_handler()
     async for chunk in handler.handle_generation(
@@ -931,6 +962,7 @@ async def _iterate_gemini_stream(
                 response_model,
                 api_key_id=api_key_id,
                 allowed_token_ids=allowed_token_ids,
+                project_id=project_id,
             )
             if event:
                 yield event
@@ -948,6 +980,7 @@ async def _iterate_gemini_stream(
             response_model,
             api_key_id=api_key_id,
             allowed_token_ids=allowed_token_ids,
+            project_id=project_id,
         )
         if event:
             yield event
@@ -986,6 +1019,89 @@ async def _resolve_project_pin(
     if not proj:
         raise HTTPException(status_code=400, detail="project_id not found")
     return ({int(proj.token_id)}, pid)
+
+
+def _reject_explicit_project_id(project_id: Optional[str]) -> None:
+    if _strip_optional_project_id(project_id):
+        raise HTTPException(
+            status_code=400,
+            detail="project_id is not accepted; it is selected automatically",
+        )
+
+
+async def _select_random_active_project_for_api_key(
+    auth_ctx: AuthContext,
+    model: str,
+) -> Tuple[Set[int], str]:
+    if auth_ctx.key_id is None:
+        raise HTTPException(status_code=403, detail="Managed API key required for generation")
+    if not auth_ctx.allowed_accounts:
+        raise HTTPException(status_code=400, detail="No accounts assigned to this API key")
+
+    handler = _ensure_generation_handler()
+    projects = await handler.db.list_projects_by_api_key(auth_ctx.key_id, limit=1000, offset=0)
+    projects_by_token: Dict[int, List[Project]] = {}
+    for project in projects:
+        token_id = int(project.token_id)
+        if not bool(project.is_active) or token_id not in auth_ctx.allowed_accounts:
+            continue
+        projects_by_token.setdefault(token_id, []).append(project)
+
+    if not projects_by_token:
+        raise HTTPException(
+            status_code=400,
+            detail="No active project found for this API key's allowed accounts",
+        )
+
+    model_config = MODEL_CONFIG.get(model) or {}
+    generation_type = model_config.get("type")
+    for_image_generation = generation_type == "image"
+    for_video_generation = generation_type == "video"
+
+    active_tokens = await handler.load_balancer.token_manager.get_active_tokens()
+    token_candidates: List[Dict[str, Any]] = []
+    for token in active_tokens:
+        token_id = int(token.id)
+        if token_id not in projects_by_token:
+            continue
+        if for_image_generation and not token.image_enabled:
+            continue
+        if for_video_generation and not token.video_enabled:
+            continue
+        if model and not supports_model_for_tier(model, normalize_user_paygate_tier(token.user_paygate_tier)):
+            continue
+
+        inflight, remaining = await handler.load_balancer._get_token_load(
+            token_id,
+            for_image_generation=for_image_generation,
+            for_video_generation=for_video_generation,
+        )
+        token_candidates.append(
+            {
+                "token_id": token_id,
+                "inflight": inflight,
+                "remaining": remaining,
+                "random": random.random(),
+            }
+        )
+
+    if not token_candidates:
+        raise HTTPException(
+            status_code=400,
+            detail="No eligible token with active project is available for this model",
+        )
+
+    token_candidates.sort(
+        key=lambda item: (
+            item["inflight"],
+            0 if item["remaining"] is None else 1,
+            -(item["remaining"] or 0),
+            item["random"],
+        )
+    )
+    selected_token_id = int(token_candidates[0]["token_id"])
+    selected_project = random.choice(projects_by_token[selected_token_id])
+    return ({selected_token_id}, selected_project.project_id)
 
 
 def _require_managed_projects_read(auth_ctx: AuthContext) -> None:
@@ -1333,6 +1449,7 @@ async def create_chat_completion(
     try:
         if auth_ctx.key_id is None:
             raise HTTPException(status_code=403, detail="Managed API key required for generation")
+        _reject_explicit_project_id(request.project_id)
         base_allowed = _resolve_allowed_token_ids(auth_ctx)
         normalized = await _normalize_openai_request(
             request,
@@ -1343,10 +1460,11 @@ async def create_chat_completion(
             raise HTTPException(status_code=400, detail="Prompt cannot be empty")
 
         request_base_url = _get_request_base_url(raw_request)
-        pin_set, pin_pid = await _resolve_project_pin(normalized.project_id, auth_ctx)
-        allowed_token_ids = pin_set if pin_set is not None else base_allowed
-        if pin_pid is not None:
-            normalized = replace(normalized, project_id=pin_pid)
+        allowed_token_ids, selected_project_id = await _select_random_active_project_for_api_key(
+            auth_ctx,
+            normalized.model,
+        )
+        normalized = replace(normalized, project_id=selected_project_id)
 
         if request.stream:
             return StreamingResponse(
@@ -1355,6 +1473,7 @@ async def create_chat_completion(
                     request_base_url,
                     allowed_token_ids,
                     api_key_id=auth_ctx.key_id,
+                    project_id=selected_project_id,
                 ),
                 media_type="text/event-stream",
                 headers={
@@ -1374,6 +1493,7 @@ async def create_chat_completion(
                 )
             )
         )
+        payload = _with_projectid(payload, selected_project_id)
         return _build_openai_json_response(payload)
 
     except HTTPException:
@@ -1394,6 +1514,7 @@ async def generate_content(
     try:
         if auth_ctx.key_id is None:
             raise HTTPException(status_code=403, detail="Managed API key required for generation")
+        _reject_explicit_project_id(request.project_id)
         base_allowed = _resolve_allowed_token_ids(auth_ctx)
         normalized = await _normalize_gemini_request(
             model,
@@ -1405,10 +1526,11 @@ async def generate_content(
             raise HTTPException(status_code=400, detail="Prompt cannot be empty")
 
         request_base_url = _get_request_base_url(raw_request)
-        pin_set, pin_pid = await _resolve_project_pin(normalized.project_id, auth_ctx)
-        allowed_token_ids = pin_set if pin_set is not None else base_allowed
-        if pin_pid is not None:
-            normalized = replace(normalized, project_id=pin_pid)
+        allowed_token_ids, selected_project_id = await _select_random_active_project_for_api_key(
+            auth_ctx,
+            normalized.model,
+        )
+        normalized = replace(normalized, project_id=selected_project_id)
 
         payload = _enrich_payload_with_direct_url(
             _parse_handler_result(
@@ -1429,6 +1551,7 @@ async def generate_content(
                 normalized.model,
                 api_key_id=auth_ctx.key_id,
                 allowed_token_ids=allowed_token_ids,
+                project_id=selected_project_id,
             )
         )
 
@@ -1457,6 +1580,7 @@ async def stream_generate_content(
     try:
         if auth_ctx.key_id is None:
             raise HTTPException(status_code=403, detail="Managed API key required for generation")
+        _reject_explicit_project_id(request.project_id)
         base_allowed = _resolve_allowed_token_ids(auth_ctx)
         normalized = await _normalize_gemini_request(
             model,
@@ -1468,10 +1592,11 @@ async def stream_generate_content(
             raise HTTPException(status_code=400, detail="Prompt cannot be empty")
 
         request_base_url = _get_request_base_url(raw_request)
-        pin_set, pin_pid = await _resolve_project_pin(normalized.project_id, auth_ctx)
-        allowed_token_ids = pin_set if pin_set is not None else base_allowed
-        if pin_pid is not None:
-            normalized = replace(normalized, project_id=pin_pid)
+        allowed_token_ids, selected_project_id = await _select_random_active_project_for_api_key(
+            auth_ctx,
+            normalized.model,
+        )
+        normalized = replace(normalized, project_id=selected_project_id)
 
         return StreamingResponse(
             _iterate_gemini_stream(
@@ -1480,6 +1605,7 @@ async def stream_generate_content(
                 request_base_url,
                 allowed_token_ids,
                 api_key_id=auth_ctx.key_id,
+                project_id=selected_project_id,
             ),
             media_type="text/event-stream",
             headers={
