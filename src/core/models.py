@@ -202,6 +202,19 @@ class CaptchaConfig(BaseModel):
     personal_project_pool_size: int = 4  # 单个 Token 默认维护的项目池数量（仅影响项目轮换）
     personal_max_resident_tabs: int = 5  # 内置浏览器共享打码标签页数量上限
     personal_idle_tab_ttl_seconds: int = 600  # 内置浏览器标签页空闲超时(秒)
+    session_refresh_enabled: bool = True
+    session_refresh_browser_first: bool = True
+    session_refresh_inject_st_cookie: bool = True
+    session_refresh_warmup_urls: str = "https://labs.google/fx/tools/flow,https://labs.google/fx"
+    session_refresh_wait_seconds_per_url: int = 60
+    session_refresh_overall_timeout_seconds: int = 180
+    session_refresh_update_st_from_cookie: bool = True
+    session_refresh_fail_if_st_refresh_fails: bool = True
+    session_refresh_local_only: bool = True
+    session_refresh_scheduler_enabled: bool = False
+    session_refresh_scheduler_interval_minutes: int = 30
+    session_refresh_scheduler_batch_size: int = 10
+    session_refresh_scheduler_only_expiring_within_minutes: int = 60
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 

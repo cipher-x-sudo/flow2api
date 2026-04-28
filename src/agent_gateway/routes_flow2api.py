@@ -80,49 +80,6 @@ async def api_v1_prefill(
     return {"ok": True}
 
 
-@router.post("/api/v1/session-token/refresh")
-async def api_v1_session_token_refresh(
-    body: dict[str, Any],
-    _auth: str = Depends(require_flow2api_bearer),
-) -> dict[str, Any]:
-    project_id = str(body.get("project_id") or "").strip()
-    token_id = str(body.get("token_id") or "").strip()
-
-    if not project_id:
-        raise HTTPException(status_code=400, detail="project_id is required")
-
-    s = load_settings()
-    try:
-        result = await registry.dispatch_session_refresh(
-            project_id=project_id,
-            token_id=token_id,
-            timeout=float(s.solve_timeout_seconds),
-        )
-    except LookupError:
-        raise HTTPException(status_code=503, detail="no agent connected") from None
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
-    except asyncio.TimeoutError:
-        raise HTTPException(status_code=504, detail="agent session refresh timeout") from None
-    except RuntimeError as e:
-        raise HTTPException(status_code=502, detail=str(e)) from e
-    except Exception as e:
-        logger.exception("dispatch_session_refresh failed")
-        raise HTTPException(status_code=500, detail=str(e)) from e
-
-    session_token = str(result.get("session_token") or "").strip()
-    session_id = str(result.get("session_id") or "").strip()
-    if not session_token:
-        raise HTTPException(status_code=500, detail="agent returned empty session_token")
-
-    out: dict[str, Any] = {
-        "session_token": session_token,
-    }
-    if session_id:
-        out["session_id"] = session_id
-    return out
-
-
 @router.get("/api/v1/agents")
 async def api_v1_agents(
     _auth: str = Depends(require_flow2api_bearer),

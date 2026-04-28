@@ -437,6 +437,7 @@ class TokenManager:
 
     async def _refresh_at_inner(self, token_id: int) -> bool:
         """Perform exactly one real AT refresh attempt."""
+        from ..core.config import config
         refresh_lock = await self._get_token_lock(
             self._refresh_locks,
             self._refresh_lock_guard,
@@ -447,21 +448,25 @@ class TokenManager:
             if not token:
                 return False
 
-            debug_logger.log_info(
-                f"[AT_REFRESH] Token {token_id}: browser-first policy active, refreshing ST before AT refresh..."
-            )
-            new_st = await self._try_refresh_st(token_id, token)
-            if not new_st:
-                debug_logger.log_error(
-                    f"[AT_REFRESH] Token {token_id}: browser-first ST refresh failed (local+gateway), aborting AT refresh"
+            effective_st = token.st
+            if config.session_refresh_browser_first and config.session_refresh_enabled:
+                debug_logger.log_info(
+                    f"[AT_REFRESH] Token {token_id}: browser-first policy active, refreshing ST before AT refresh..."
                 )
-                await self.disable_token(token_id)
-                return False
+                new_st = await self._try_refresh_st(token_id, token)
+                if not new_st and config.session_refresh_fail_if_st_refresh_fails:
+                    debug_logger.log_error(
+                        f"[AT_REFRESH] Token {token_id}: browser ST refresh failed, aborting AT refresh per strict policy"
+                    )
+                    await self.disable_token(token_id)
+                    return False
+                if new_st:
+                    effective_st = new_st
 
-            debug_logger.log_info(f"[AT_REFRESH] Token {token_id}: ST refreshed, starting AT refresh...")
+            debug_logger.log_info(f"[AT_REFRESH] Token {token_id}: starting AT refresh...")
             current_after_st = await self.db.get_token(token_id)
             previous_expires = current_after_st.at_expires if current_after_st else token.at_expires
-            result = await self._do_refresh_at(token_id, new_st, previous_at_expires=previous_expires)
+            result = await self._do_refresh_at(token_id, effective_st, previous_at_expires=previous_expires)
             if result:
                 return True
 
@@ -638,25 +643,8 @@ class TokenManager:
             if persisted_local:
                 return persisted_local
 
-            # 2) Fallback to remote browser gateway when available.
-            try:
-                remote_st = await self.flow_client.refresh_session_token_remote_browser(
-                    token.current_project_id,
-                    token_id=token_id,
-                    timeout_override=int(refresh_timeout_seconds),
-                )
-            except Exception as remote_err:
-                debug_logger.log_warning(
-                    f"[ST_REFRESH] Token {token_id}: gateway 刷新 ST 失败: {remote_err}"
-                )
-                remote_st = None
-
-            persisted_remote = await _persist_if_new(remote_st, "gateway_headed")
-            if persisted_remote:
-                return persisted_remote
-
             debug_logger.log_warning(
-                f"[ST_REFRESH] Token {token_id}: 本地与 gateway 刷新 ST 均失败 (mode={captcha_mode})"
+                f"[ST_REFRESH] Token {token_id}: 本地有头浏览器刷新 ST 失败 (mode={captcha_mode})"
             )
             return None
 

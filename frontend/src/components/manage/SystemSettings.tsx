@@ -31,6 +31,19 @@ type CaptchaForm = {
   personal_project_pool_size: number
   personal_max_resident_tabs: number
   personal_idle_tab_ttl_seconds: number
+  session_refresh_enabled: boolean
+  session_refresh_browser_first: boolean
+  session_refresh_inject_st_cookie: boolean
+  session_refresh_warmup_urls: string
+  session_refresh_wait_seconds_per_url: number
+  session_refresh_overall_timeout_seconds: number
+  session_refresh_update_st_from_cookie: boolean
+  session_refresh_fail_if_st_refresh_fails: boolean
+  session_refresh_local_only: boolean
+  session_refresh_scheduler_enabled: boolean
+  session_refresh_scheduler_interval_minutes: number
+  session_refresh_scheduler_batch_size: number
+  session_refresh_scheduler_only_expiring_within_minutes: number
   personal_proxy_enabled: boolean
   personal_proxy_url: string
 }
@@ -56,6 +69,19 @@ const defaultCaptcha: CaptchaForm = {
   personal_project_pool_size: 4,
   personal_max_resident_tabs: 5,
   personal_idle_tab_ttl_seconds: 600,
+  session_refresh_enabled: true,
+  session_refresh_browser_first: true,
+  session_refresh_inject_st_cookie: true,
+  session_refresh_warmup_urls: "https://labs.google/fx/tools/flow,https://labs.google/fx",
+  session_refresh_wait_seconds_per_url: 60,
+  session_refresh_overall_timeout_seconds: 180,
+  session_refresh_update_st_from_cookie: true,
+  session_refresh_fail_if_st_refresh_fails: true,
+  session_refresh_local_only: true,
+  session_refresh_scheduler_enabled: false,
+  session_refresh_scheduler_interval_minutes: 30,
+  session_refresh_scheduler_batch_size: 10,
+  session_refresh_scheduler_only_expiring_within_minutes: 60,
   personal_proxy_enabled: false,
   personal_proxy_url: "",
 }
@@ -167,6 +193,23 @@ export function SystemSettings({ active }: { active: boolean }) {
         personal_project_pool_size: Number(raw.personal_project_pool_size ?? 4),
         personal_max_resident_tabs: Number(raw.personal_max_resident_tabs ?? 5),
         personal_idle_tab_ttl_seconds: Number(raw.personal_idle_tab_ttl_seconds ?? 600),
+        session_refresh_enabled: raw.session_refresh_enabled !== false,
+        session_refresh_browser_first: raw.session_refresh_browser_first !== false,
+        session_refresh_inject_st_cookie: raw.session_refresh_inject_st_cookie !== false,
+        session_refresh_warmup_urls: Array.isArray(raw.session_refresh_warmup_urls)
+          ? raw.session_refresh_warmup_urls.join(",")
+          : String(raw.session_refresh_warmup_urls ?? defaultCaptcha.session_refresh_warmup_urls),
+        session_refresh_wait_seconds_per_url: Number(raw.session_refresh_wait_seconds_per_url ?? 60),
+        session_refresh_overall_timeout_seconds: Number(raw.session_refresh_overall_timeout_seconds ?? 180),
+        session_refresh_update_st_from_cookie: raw.session_refresh_update_st_from_cookie !== false,
+        session_refresh_fail_if_st_refresh_fails: raw.session_refresh_fail_if_st_refresh_fails !== false,
+        session_refresh_local_only: raw.session_refresh_local_only !== false,
+        session_refresh_scheduler_enabled: !!raw.session_refresh_scheduler_enabled,
+        session_refresh_scheduler_interval_minutes: Number(raw.session_refresh_scheduler_interval_minutes ?? 30),
+        session_refresh_scheduler_batch_size: Number(raw.session_refresh_scheduler_batch_size ?? 10),
+        session_refresh_scheduler_only_expiring_within_minutes: Number(
+          raw.session_refresh_scheduler_only_expiring_within_minutes ?? 60
+        ),
         personal_proxy_enabled: !!raw.browser_proxy_enabled,
         personal_proxy_url: String(raw.browser_proxy_url ?? ""),
       }))
@@ -425,6 +468,23 @@ export function SystemSettings({ active }: { active: boolean }) {
           personal_project_pool_size: captcha.personal_project_pool_size,
           personal_max_resident_tabs: captcha.personal_max_resident_tabs,
           personal_idle_tab_ttl_seconds: captcha.personal_idle_tab_ttl_seconds,
+          session_refresh_enabled: captcha.session_refresh_enabled,
+          session_refresh_browser_first: captcha.session_refresh_browser_first,
+          session_refresh_inject_st_cookie: captcha.session_refresh_inject_st_cookie,
+          session_refresh_warmup_urls: captcha.session_refresh_warmup_urls
+            .split(",")
+            .map((item) => item.trim())
+            .filter(Boolean),
+          session_refresh_wait_seconds_per_url: captcha.session_refresh_wait_seconds_per_url,
+          session_refresh_overall_timeout_seconds: captcha.session_refresh_overall_timeout_seconds,
+          session_refresh_update_st_from_cookie: captcha.session_refresh_update_st_from_cookie,
+          session_refresh_fail_if_st_refresh_fails: captcha.session_refresh_fail_if_st_refresh_fails,
+          session_refresh_local_only: captcha.session_refresh_local_only,
+          session_refresh_scheduler_enabled: captcha.session_refresh_scheduler_enabled,
+          session_refresh_scheduler_interval_minutes: captcha.session_refresh_scheduler_interval_minutes,
+          session_refresh_scheduler_batch_size: captcha.session_refresh_scheduler_batch_size,
+          session_refresh_scheduler_only_expiring_within_minutes:
+            captcha.session_refresh_scheduler_only_expiring_within_minutes,
         }),
       })
       if (!r) return
@@ -740,6 +800,99 @@ export function SystemSettings({ active }: { active: boolean }) {
                 value={captcha.browser_count}
                 onChange={(e) => setCaptcha((c) => ({ ...c, browser_count: parseInt(e.target.value, 10) || 1 }))}
               />
+              <div className="mt-4 border-t pt-3 space-y-2">
+                <Label>Session refresh strategy</Label>
+                <div className="flex items-center gap-2">
+                  <Switch
+                    checked={captcha.session_refresh_enabled}
+                    onCheckedChange={(v) => setCaptcha((c) => ({ ...c, session_refresh_enabled: v }))}
+                  />
+                  <Label>Enable browser session refresh</Label>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Switch
+                    checked={captcha.session_refresh_inject_st_cookie}
+                    onCheckedChange={(v) => setCaptcha((c) => ({ ...c, session_refresh_inject_st_cookie: v }))}
+                  />
+                  <Label>Inject current ST cookie before warmup</Label>
+                </div>
+                <Label>Warmup URLs (comma separated)</Label>
+                <Input
+                  value={captcha.session_refresh_warmup_urls}
+                  onChange={(e) => setCaptcha((c) => ({ ...c, session_refresh_warmup_urls: e.target.value }))}
+                />
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <Label>Wait per URL (s)</Label>
+                    <Input
+                      type="number"
+                      min={0}
+                      value={captcha.session_refresh_wait_seconds_per_url}
+                      onChange={(e) =>
+                        setCaptcha((c) => ({ ...c, session_refresh_wait_seconds_per_url: parseInt(e.target.value, 10) || 0 }))
+                      }
+                    />
+                  </div>
+                  <div>
+                    <Label>Overall timeout (s)</Label>
+                    <Input
+                      type="number"
+                      min={10}
+                      value={captcha.session_refresh_overall_timeout_seconds}
+                      onChange={(e) =>
+                        setCaptcha((c) => ({ ...c, session_refresh_overall_timeout_seconds: parseInt(e.target.value, 10) || 180 }))
+                      }
+                    />
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Switch
+                    checked={captcha.session_refresh_scheduler_enabled}
+                    onCheckedChange={(v) => setCaptcha((c) => ({ ...c, session_refresh_scheduler_enabled: v }))}
+                  />
+                  <Label>Enable scheduled auto refresh</Label>
+                </div>
+                {captcha.session_refresh_scheduler_enabled ? (
+                  <div className="grid grid-cols-3 gap-2">
+                    <div>
+                      <Label>Interval (min)</Label>
+                      <Input
+                        type="number"
+                        min={1}
+                        value={captcha.session_refresh_scheduler_interval_minutes}
+                        onChange={(e) =>
+                          setCaptcha((c) => ({ ...c, session_refresh_scheduler_interval_minutes: parseInt(e.target.value, 10) || 30 }))
+                        }
+                      />
+                    </div>
+                    <div>
+                      <Label>Batch size</Label>
+                      <Input
+                        type="number"
+                        min={1}
+                        value={captcha.session_refresh_scheduler_batch_size}
+                        onChange={(e) =>
+                          setCaptcha((c) => ({ ...c, session_refresh_scheduler_batch_size: parseInt(e.target.value, 10) || 10 }))
+                        }
+                      />
+                    </div>
+                    <div>
+                      <Label>Expiring window (min)</Label>
+                      <Input
+                        type="number"
+                        min={1}
+                        value={captcha.session_refresh_scheduler_only_expiring_within_minutes}
+                        onChange={(e) =>
+                          setCaptcha((c) => ({
+                            ...c,
+                            session_refresh_scheduler_only_expiring_within_minutes: parseInt(e.target.value, 10) || 60,
+                          }))
+                        }
+                      />
+                    </div>
+                  </div>
+                ) : null}
+              </div>
             </div>
           )}
           {m === "personal" && (

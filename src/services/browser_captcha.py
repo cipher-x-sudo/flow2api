@@ -2132,6 +2132,18 @@ class BrowserCaptchaService:
 
         token_proxy_url = await self._resolve_token_proxy_url(token_id)
         max_attempts = 2
+        warmup_urls = config.session_refresh_warmup_urls
+        wait_per_url = max(0.0, float(config.session_refresh_wait_seconds_per_url))
+        should_inject_st = bool(config.session_refresh_inject_st_cookie)
+        should_update_st_from_cookie = bool(config.session_refresh_update_st_from_cookie)
+        token_st_value: Optional[str] = None
+        if should_inject_st and token_id and self.db:
+            try:
+                token_obj = await self.db.get_token(int(token_id))
+                token_st_value = str((token_obj.st if token_obj else "") or "").strip()
+            except Exception as e:
+                debug_logger.log_warning(f"[BrowserCaptcha] failed reading token ST for refresh: {e}")
+                token_st_value = None
 
         async def _extract_session_cookie(context) -> Optional[str]:
             cookies = await context.cookies()
@@ -2151,12 +2163,30 @@ class BrowserCaptchaService:
             try:
                 _, _, context = await browser._get_or_create_shared_browser(token_proxy_url=token_proxy_url)
                 page = await context.new_page()
+                if should_inject_st and token_st_value:
+                    try:
+                        await context.add_cookies([
+                            {
+                                "name": "__Secure-next-auth.session-token",
+                                "value": token_st_value,
+                                "domain": "labs.google",
+                                "path": "/",
+                                "secure": True,
+                                "httpOnly": True,
+                                "sameSite": "Lax",
+                            }
+                        ])
+                    except Exception as cookie_err:
+                        debug_logger.log_warning(
+                            f"[BrowserCaptcha] failed injecting ST cookie before warmup: {type(cookie_err).__name__}: {cookie_err}"
+                        )
                 try:
-                    await page.goto(
-                        BROWSER_CAPTCHA_DEFAULT_PAGE_URL,
-                        wait_until="domcontentloaded",
-                        timeout=30000,
-                    )
+                    for warmup_url in warmup_urls:
+                        await page.goto(warmup_url, wait_until="domcontentloaded", timeout=30000)
+                        if wait_per_url > 0:
+                            await asyncio.sleep(wait_per_url)
+                    await page.goto(BROWSER_CAPTCHA_DEFAULT_PAGE_URL, wait_until="domcontentloaded", timeout=30000)
+                    await page.goto("https://labs.google/fx/api/auth/session", wait_until="domcontentloaded", timeout=30000)
                 except Exception:
                     pass
                 await asyncio.sleep(2)
@@ -2166,7 +2196,7 @@ class BrowserCaptchaService:
                     debug_logger.log_info(
                         f"[BrowserCaptcha] refreshed session token from slot {slot_id} ({elapsed_ms}ms)"
                     )
-                    return session_token
+                    return session_token if should_update_st_from_cookie else (token_st_value or session_token)
 
                 # One extra refresh/read pass before failing hard.
                 try:

@@ -23,15 +23,6 @@ class PendingSolve:
 
 
 @dataclass
-class PendingSessionRefresh:
-    job_id: str
-    future: asyncio.Future[dict[str, Any]]
-    project_id: str
-    token_id: str
-    agent_ws: WebSocket
-
-
-@dataclass
 class AgentBinding:
     ws: WebSocket
     auth_method: str
@@ -123,58 +114,6 @@ class AgentRegistry:
             "job_id": job_id,
             "project_id": project_id,
             "action": action,
-        }
-        try:
-            await ws.send_json(msg)
-        except Exception as e:
-            async with self._lock:
-                self._pending.pop(job_id, None)
-            if not fut.done():
-                fut.set_exception(e)
-            raise
-
-        try:
-            return await asyncio.wait_for(fut, timeout=timeout)
-        except asyncio.TimeoutError:
-            async with self._lock:
-                self._pending.pop(job_id, None)
-            raise
-        except Exception:
-            async with self._lock:
-                self._pending.pop(job_id, None)
-            raise
-
-    async def dispatch_session_refresh(
-        self,
-        project_id: str,
-        token_id: str,
-        timeout: float,
-    ) -> dict[str, Any]:
-        job_id = str(uuid.uuid4())
-        loop = asyncio.get_event_loop()
-        fut: asyncio.Future[dict[str, Any]] = loop.create_future()
-        async with self._lock:
-            bindings = list(self._ws_binding.values())
-            if not bindings:
-                raise LookupError("no_agent")
-            idx = self._rr_cursor % len(bindings)
-            binding = bindings[idx]
-            self._rr_cursor = (idx + 1) % len(bindings)
-            ws = binding.ws
-            p = PendingSessionRefresh(
-                job_id=job_id,
-                future=fut,
-                project_id=project_id,
-                token_id=token_id,
-                agent_ws=ws,
-            )
-            self._pending[job_id] = p
-
-        msg: dict[str, Any] = {
-            "type": "session_refresh_job",
-            "job_id": job_id,
-            "project_id": project_id,
-            "token_id": token_id,
         }
         try:
             await ws.send_json(msg)

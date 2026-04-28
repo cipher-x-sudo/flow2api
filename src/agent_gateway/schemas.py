@@ -50,14 +50,3 @@ class WsSolveError(BaseModel):
     error: str = "agent_error"
 
 
-class WsSessionRefreshResult(BaseModel):
-    type: Literal["session_refresh_result"] = "session_refresh_result"
-    job_id: str
-    session_token: str
-    session_id: str = ""
-
-
-class WsSessionRefreshError(BaseModel):
-    type: Literal["session_refresh_error"] = "session_refresh_error"
-    job_id: str
-    error: str = "agent_session_refresh_error"

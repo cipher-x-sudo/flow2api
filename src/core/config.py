@@ -1,7 +1,7 @@
 """Configuration management for Flow2API"""
 import tomli
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 
 class Config:
     """Application configuration"""
@@ -608,6 +608,155 @@ class Config:
         except Exception:
             normalized = 60
         self._config["captcha"]["remote_browser_timeout"] = normalized
+
+    @property
+    def session_refresh_enabled(self) -> bool:
+        return bool(self._config.get("captcha", {}).get("session_refresh_enabled", True))
+
+    def set_session_refresh_enabled(self, enabled: bool):
+        if "captcha" not in self._config:
+            self._config["captcha"] = {}
+        self._config["captcha"]["session_refresh_enabled"] = bool(enabled)
+
+    @property
+    def session_refresh_browser_first(self) -> bool:
+        return bool(self._config.get("captcha", {}).get("session_refresh_browser_first", True))
+
+    def set_session_refresh_browser_first(self, enabled: bool):
+        if "captcha" not in self._config:
+            self._config["captcha"] = {}
+        self._config["captcha"]["session_refresh_browser_first"] = bool(enabled)
+
+    @property
+    def session_refresh_inject_st_cookie(self) -> bool:
+        return bool(self._config.get("captcha", {}).get("session_refresh_inject_st_cookie", True))
+
+    def set_session_refresh_inject_st_cookie(self, enabled: bool):
+        if "captcha" not in self._config:
+            self._config["captcha"] = {}
+        self._config["captcha"]["session_refresh_inject_st_cookie"] = bool(enabled)
+
+    @property
+    def session_refresh_warmup_urls(self) -> List[str]:
+        raw = self._config.get("captcha", {}).get(
+            "session_refresh_warmup_urls",
+            "https://labs.google/fx/tools/flow,https://labs.google/fx",
+        )
+        if isinstance(raw, list):
+            values = [str(item).strip() for item in raw if str(item).strip()]
+        else:
+            values = [item.strip() for item in str(raw or "").split(",") if item.strip()]
+        return values or ["https://labs.google/fx/tools/flow", "https://labs.google/fx"]
+
+    def set_session_refresh_warmup_urls(self, urls: List[str] | str):
+        if "captcha" not in self._config:
+            self._config["captcha"] = {}
+        if isinstance(urls, list):
+            cleaned = [str(item).strip() for item in urls if str(item).strip()]
+        else:
+            cleaned = [item.strip() for item in str(urls or "").split(",") if item.strip()]
+        self._config["captcha"]["session_refresh_warmup_urls"] = ",".join(cleaned)
+
+    @property
+    def session_refresh_wait_seconds_per_url(self) -> int:
+        value = self._config.get("captcha", {}).get("session_refresh_wait_seconds_per_url", 60)
+        try:
+            return max(0, min(600, int(value)))
+        except Exception:
+            return 60
+
+    def set_session_refresh_wait_seconds_per_url(self, seconds: int):
+        if "captcha" not in self._config:
+            self._config["captcha"] = {}
+        self._config["captcha"]["session_refresh_wait_seconds_per_url"] = max(0, min(600, int(seconds)))
+
+    @property
+    def session_refresh_overall_timeout_seconds(self) -> int:
+        value = self._config.get("captcha", {}).get("session_refresh_overall_timeout_seconds", 180)
+        try:
+            return max(10, min(1800, int(value)))
+        except Exception:
+            return 180
+
+    def set_session_refresh_overall_timeout_seconds(self, seconds: int):
+        if "captcha" not in self._config:
+            self._config["captcha"] = {}
+        self._config["captcha"]["session_refresh_overall_timeout_seconds"] = max(10, min(1800, int(seconds)))
+
+    @property
+    def session_refresh_update_st_from_cookie(self) -> bool:
+        return bool(self._config.get("captcha", {}).get("session_refresh_update_st_from_cookie", True))
+
+    def set_session_refresh_update_st_from_cookie(self, enabled: bool):
+        if "captcha" not in self._config:
+            self._config["captcha"] = {}
+        self._config["captcha"]["session_refresh_update_st_from_cookie"] = bool(enabled)
+
+    @property
+    def session_refresh_fail_if_st_refresh_fails(self) -> bool:
+        return bool(self._config.get("captcha", {}).get("session_refresh_fail_if_st_refresh_fails", True))
+
+    def set_session_refresh_fail_if_st_refresh_fails(self, enabled: bool):
+        if "captcha" not in self._config:
+            self._config["captcha"] = {}
+        self._config["captcha"]["session_refresh_fail_if_st_refresh_fails"] = bool(enabled)
+
+    @property
+    def session_refresh_local_only(self) -> bool:
+        return bool(self._config.get("captcha", {}).get("session_refresh_local_only", True))
+
+    def set_session_refresh_local_only(self, enabled: bool):
+        if "captcha" not in self._config:
+            self._config["captcha"] = {}
+        self._config["captcha"]["session_refresh_local_only"] = bool(enabled)
+
+    @property
+    def session_refresh_scheduler_enabled(self) -> bool:
+        return bool(self._config.get("captcha", {}).get("session_refresh_scheduler_enabled", False))
+
+    def set_session_refresh_scheduler_enabled(self, enabled: bool):
+        if "captcha" not in self._config:
+            self._config["captcha"] = {}
+        self._config["captcha"]["session_refresh_scheduler_enabled"] = bool(enabled)
+
+    @property
+    def session_refresh_scheduler_interval_minutes(self) -> int:
+        value = self._config.get("captcha", {}).get("session_refresh_scheduler_interval_minutes", 30)
+        try:
+            return max(1, min(1440, int(value)))
+        except Exception:
+            return 30
+
+    def set_session_refresh_scheduler_interval_minutes(self, minutes: int):
+        if "captcha" not in self._config:
+            self._config["captcha"] = {}
+        self._config["captcha"]["session_refresh_scheduler_interval_minutes"] = max(1, min(1440, int(minutes)))
+
+    @property
+    def session_refresh_scheduler_batch_size(self) -> int:
+        value = self._config.get("captcha", {}).get("session_refresh_scheduler_batch_size", 10)
+        try:
+            return max(1, min(200, int(value)))
+        except Exception:
+            return 10
+
+    def set_session_refresh_scheduler_batch_size(self, size: int):
+        if "captcha" not in self._config:
+            self._config["captcha"] = {}
+        self._config["captcha"]["session_refresh_scheduler_batch_size"] = max(1, min(200, int(size)))
+
+    @property
+    def session_refresh_scheduler_only_expiring_within_minutes(self) -> int:
+        value = self._config.get("captcha", {}).get("session_refresh_scheduler_only_expiring_within_minutes", 60)
+        try:
+            return max(1, min(10080, int(value)))
+        except Exception:
+            return 60
+
+    def set_session_refresh_scheduler_only_expiring_within_minutes(self, minutes: int):
+        if "captcha" not in self._config:
+            self._config["captcha"] = {}
+        self._config["captcha"]["session_refresh_scheduler_only_expiring_within_minutes"] = max(1, min(10080, int(minutes)))
 
 
 # Global config instance

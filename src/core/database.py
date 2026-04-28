@@ -227,6 +227,19 @@ class Database:
             personal_project_pool_size = 4
             personal_max_resident_tabs = 5
             personal_idle_tab_ttl_seconds = 600
+            session_refresh_enabled = True
+            session_refresh_browser_first = True
+            session_refresh_inject_st_cookie = True
+            session_refresh_warmup_urls = "https://labs.google/fx/tools/flow,https://labs.google/fx"
+            session_refresh_wait_seconds_per_url = 60
+            session_refresh_overall_timeout_seconds = 180
+            session_refresh_update_st_from_cookie = True
+            session_refresh_fail_if_st_refresh_fails = True
+            session_refresh_local_only = True
+            session_refresh_scheduler_enabled = False
+            session_refresh_scheduler_interval_minutes = 30
+            session_refresh_scheduler_batch_size = 10
+            session_refresh_scheduler_only_expiring_within_minutes = 60
 
             if config_dict:
                 captcha_config = config_dict.get("captcha", {})
@@ -244,6 +257,25 @@ class Database:
                 personal_project_pool_size = captcha_config.get("personal_project_pool_size", 4)
                 personal_max_resident_tabs = captcha_config.get("personal_max_resident_tabs", 5)
                 personal_idle_tab_ttl_seconds = captcha_config.get("personal_idle_tab_ttl_seconds", 600)
+                session_refresh_enabled = captcha_config.get("session_refresh_enabled", True)
+                session_refresh_browser_first = captcha_config.get("session_refresh_browser_first", True)
+                session_refresh_inject_st_cookie = captcha_config.get("session_refresh_inject_st_cookie", True)
+                session_refresh_warmup_urls = captcha_config.get(
+                    "session_refresh_warmup_urls",
+                    "https://labs.google/fx/tools/flow,https://labs.google/fx",
+                )
+                session_refresh_wait_seconds_per_url = captcha_config.get("session_refresh_wait_seconds_per_url", 60)
+                session_refresh_overall_timeout_seconds = captcha_config.get("session_refresh_overall_timeout_seconds", 180)
+                session_refresh_update_st_from_cookie = captcha_config.get("session_refresh_update_st_from_cookie", True)
+                session_refresh_fail_if_st_refresh_fails = captcha_config.get("session_refresh_fail_if_st_refresh_fails", True)
+                session_refresh_local_only = captcha_config.get("session_refresh_local_only", True)
+                session_refresh_scheduler_enabled = captcha_config.get("session_refresh_scheduler_enabled", False)
+                session_refresh_scheduler_interval_minutes = captcha_config.get("session_refresh_scheduler_interval_minutes", 30)
+                session_refresh_scheduler_batch_size = captcha_config.get("session_refresh_scheduler_batch_size", 10)
+                session_refresh_scheduler_only_expiring_within_minutes = captcha_config.get(
+                    "session_refresh_scheduler_only_expiring_within_minutes",
+                    60,
+                )
             try:
                 remote_browser_timeout = max(5, int(remote_browser_timeout))
             except Exception:
@@ -271,9 +303,15 @@ class Database:
                     remote_browser_base_url, remote_browser_api_key, remote_browser_timeout,
                     browser_fallback_to_remote_browser,
                     browser_count, personal_project_pool_size,
-                    personal_max_resident_tabs, personal_idle_tab_ttl_seconds
+                    personal_max_resident_tabs, personal_idle_tab_ttl_seconds,
+                    session_refresh_enabled, session_refresh_browser_first, session_refresh_inject_st_cookie,
+                    session_refresh_warmup_urls, session_refresh_wait_seconds_per_url,
+                    session_refresh_overall_timeout_seconds, session_refresh_update_st_from_cookie,
+                    session_refresh_fail_if_st_refresh_fails, session_refresh_local_only,
+                    session_refresh_scheduler_enabled, session_refresh_scheduler_interval_minutes,
+                    session_refresh_scheduler_batch_size, session_refresh_scheduler_only_expiring_within_minutes
                 )
-                VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 captcha_method,
                 yescaptcha_api_key,
@@ -286,6 +324,20 @@ class Database:
                 personal_project_pool_size,
                 personal_max_resident_tabs,
                 personal_idle_tab_ttl_seconds,
+                bool(session_refresh_enabled),
+                bool(session_refresh_browser_first),
+                bool(session_refresh_inject_st_cookie),
+                str(session_refresh_warmup_urls or "").strip()
+                or "https://labs.google/fx/tools/flow,https://labs.google/fx",
+                max(0, int(session_refresh_wait_seconds_per_url or 60)),
+                max(10, int(session_refresh_overall_timeout_seconds or 180)),
+                bool(session_refresh_update_st_from_cookie),
+                bool(session_refresh_fail_if_st_refresh_fails),
+                bool(session_refresh_local_only),
+                bool(session_refresh_scheduler_enabled),
+                max(1, int(session_refresh_scheduler_interval_minutes or 30)),
+                max(1, int(session_refresh_scheduler_batch_size or 10)),
+                max(1, int(session_refresh_scheduler_only_expiring_within_minutes or 60)),
             ))
 
         # Ensure plugin_config has a row
@@ -598,6 +650,19 @@ class Database:
                     ("remote_browser_api_key", "TEXT DEFAULT ''"),
                     ("remote_browser_timeout", "INTEGER DEFAULT 60"),
                     ("browser_fallback_to_remote_browser", "BOOLEAN DEFAULT 1"),
+                    ("session_refresh_enabled", "BOOLEAN DEFAULT 1"),
+                    ("session_refresh_browser_first", "BOOLEAN DEFAULT 1"),
+                    ("session_refresh_inject_st_cookie", "BOOLEAN DEFAULT 1"),
+                    ("session_refresh_warmup_urls", "TEXT DEFAULT 'https://labs.google/fx/tools/flow,https://labs.google/fx'"),
+                    ("session_refresh_wait_seconds_per_url", "INTEGER DEFAULT 60"),
+                    ("session_refresh_overall_timeout_seconds", "INTEGER DEFAULT 180"),
+                    ("session_refresh_update_st_from_cookie", "BOOLEAN DEFAULT 1"),
+                    ("session_refresh_fail_if_st_refresh_fails", "BOOLEAN DEFAULT 1"),
+                    ("session_refresh_local_only", "BOOLEAN DEFAULT 1"),
+                    ("session_refresh_scheduler_enabled", "BOOLEAN DEFAULT 0"),
+                    ("session_refresh_scheduler_interval_minutes", "INTEGER DEFAULT 30"),
+                    ("session_refresh_scheduler_batch_size", "INTEGER DEFAULT 10"),
+                    ("session_refresh_scheduler_only_expiring_within_minutes", "INTEGER DEFAULT 60"),
                 ]
 
                 for col_name, col_type in captcha_columns_to_add:
@@ -926,6 +991,19 @@ class Database:
                     personal_max_resident_tabs INTEGER DEFAULT 5,
                     personal_idle_tab_ttl_seconds INTEGER DEFAULT 600,
                     browser_captcha_page_url TEXT DEFAULT 'https://labs.google/fx/api/auth/providers',
+                    session_refresh_enabled BOOLEAN DEFAULT 1,
+                    session_refresh_browser_first BOOLEAN DEFAULT 1,
+                    session_refresh_inject_st_cookie BOOLEAN DEFAULT 1,
+                    session_refresh_warmup_urls TEXT DEFAULT 'https://labs.google/fx/tools/flow,https://labs.google/fx',
+                    session_refresh_wait_seconds_per_url INTEGER DEFAULT 60,
+                    session_refresh_overall_timeout_seconds INTEGER DEFAULT 180,
+                    session_refresh_update_st_from_cookie BOOLEAN DEFAULT 1,
+                    session_refresh_fail_if_st_refresh_fails BOOLEAN DEFAULT 1,
+                    session_refresh_local_only BOOLEAN DEFAULT 1,
+                    session_refresh_scheduler_enabled BOOLEAN DEFAULT 0,
+                    session_refresh_scheduler_interval_minutes INTEGER DEFAULT 30,
+                    session_refresh_scheduler_batch_size INTEGER DEFAULT 10,
+                    session_refresh_scheduler_only_expiring_within_minutes INTEGER DEFAULT 60,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
@@ -2276,6 +2354,35 @@ class Database:
             config.set_browser_captcha_page_url(
                 getattr(captcha_config, "browser_captcha_page_url", None) or ""
             )
+            config.set_session_refresh_enabled(bool(getattr(captcha_config, "session_refresh_enabled", True)))
+            config.set_session_refresh_browser_first(bool(getattr(captcha_config, "session_refresh_browser_first", True)))
+            config.set_session_refresh_inject_st_cookie(bool(getattr(captcha_config, "session_refresh_inject_st_cookie", True)))
+            config.set_session_refresh_warmup_urls(getattr(captcha_config, "session_refresh_warmup_urls", ""))
+            config.set_session_refresh_wait_seconds_per_url(
+                int(getattr(captcha_config, "session_refresh_wait_seconds_per_url", 60) or 60)
+            )
+            config.set_session_refresh_overall_timeout_seconds(
+                int(getattr(captcha_config, "session_refresh_overall_timeout_seconds", 180) or 180)
+            )
+            config.set_session_refresh_update_st_from_cookie(
+                bool(getattr(captcha_config, "session_refresh_update_st_from_cookie", True))
+            )
+            config.set_session_refresh_fail_if_st_refresh_fails(
+                bool(getattr(captcha_config, "session_refresh_fail_if_st_refresh_fails", True))
+            )
+            config.set_session_refresh_local_only(bool(getattr(captcha_config, "session_refresh_local_only", True)))
+            config.set_session_refresh_scheduler_enabled(
+                bool(getattr(captcha_config, "session_refresh_scheduler_enabled", False))
+            )
+            config.set_session_refresh_scheduler_interval_minutes(
+                int(getattr(captcha_config, "session_refresh_scheduler_interval_minutes", 30) or 30)
+            )
+            config.set_session_refresh_scheduler_batch_size(
+                int(getattr(captcha_config, "session_refresh_scheduler_batch_size", 10) or 10)
+            )
+            config.set_session_refresh_scheduler_only_expiring_within_minutes(
+                int(getattr(captcha_config, "session_refresh_scheduler_only_expiring_within_minutes", 60) or 60)
+            )
 
     # Cache config operations
     async def get_cache_config(self) -> CacheConfig:
@@ -2413,6 +2520,19 @@ class Database:
         personal_max_resident_tabs: int = None,
         personal_idle_tab_ttl_seconds: int = None,
         browser_captcha_page_url: str = None,
+        session_refresh_enabled: bool = None,
+        session_refresh_browser_first: bool = None,
+        session_refresh_inject_st_cookie: bool = None,
+        session_refresh_warmup_urls: str = None,
+        session_refresh_wait_seconds_per_url: int = None,
+        session_refresh_overall_timeout_seconds: int = None,
+        session_refresh_update_st_from_cookie: bool = None,
+        session_refresh_fail_if_st_refresh_fails: bool = None,
+        session_refresh_local_only: bool = None,
+        session_refresh_scheduler_enabled: bool = None,
+        session_refresh_scheduler_interval_minutes: int = None,
+        session_refresh_scheduler_batch_size: int = None,
+        session_refresh_scheduler_only_expiring_within_minutes: int = None,
     ):
         """Update captcha configuration"""
         async with self._connect(write=True) as db:
@@ -2452,10 +2572,89 @@ class Database:
                     else current.get("browser_captcha_page_url", default_page_url)
                 )
                 new_browser_captcha_page_url = (new_browser_captcha_page_url or default_page_url).strip() or default_page_url
+                new_session_refresh_enabled = (
+                    session_refresh_enabled
+                    if session_refresh_enabled is not None
+                    else current.get("session_refresh_enabled", True)
+                )
+                new_session_refresh_browser_first = (
+                    session_refresh_browser_first
+                    if session_refresh_browser_first is not None
+                    else current.get("session_refresh_browser_first", True)
+                )
+                new_session_refresh_inject_st_cookie = (
+                    session_refresh_inject_st_cookie
+                    if session_refresh_inject_st_cookie is not None
+                    else current.get("session_refresh_inject_st_cookie", True)
+                )
+                new_session_refresh_warmup_urls = (
+                    session_refresh_warmup_urls
+                    if session_refresh_warmup_urls is not None
+                    else current.get(
+                        "session_refresh_warmup_urls",
+                        "https://labs.google/fx/tools/flow,https://labs.google/fx",
+                    )
+                )
+                new_session_refresh_wait_seconds_per_url = (
+                    session_refresh_wait_seconds_per_url
+                    if session_refresh_wait_seconds_per_url is not None
+                    else current.get("session_refresh_wait_seconds_per_url", 60)
+                )
+                new_session_refresh_overall_timeout_seconds = (
+                    session_refresh_overall_timeout_seconds
+                    if session_refresh_overall_timeout_seconds is not None
+                    else current.get("session_refresh_overall_timeout_seconds", 180)
+                )
+                new_session_refresh_update_st_from_cookie = (
+                    session_refresh_update_st_from_cookie
+                    if session_refresh_update_st_from_cookie is not None
+                    else current.get("session_refresh_update_st_from_cookie", True)
+                )
+                new_session_refresh_fail_if_st_refresh_fails = (
+                    session_refresh_fail_if_st_refresh_fails
+                    if session_refresh_fail_if_st_refresh_fails is not None
+                    else current.get("session_refresh_fail_if_st_refresh_fails", True)
+                )
+                new_session_refresh_local_only = (
+                    session_refresh_local_only
+                    if session_refresh_local_only is not None
+                    else current.get("session_refresh_local_only", True)
+                )
+                new_session_refresh_scheduler_enabled = (
+                    session_refresh_scheduler_enabled
+                    if session_refresh_scheduler_enabled is not None
+                    else current.get("session_refresh_scheduler_enabled", False)
+                )
+                new_session_refresh_scheduler_interval_minutes = (
+                    session_refresh_scheduler_interval_minutes
+                    if session_refresh_scheduler_interval_minutes is not None
+                    else current.get("session_refresh_scheduler_interval_minutes", 30)
+                )
+                new_session_refresh_scheduler_batch_size = (
+                    session_refresh_scheduler_batch_size
+                    if session_refresh_scheduler_batch_size is not None
+                    else current.get("session_refresh_scheduler_batch_size", 10)
+                )
+                new_session_refresh_scheduler_only_expiring_within_minutes = (
+                    session_refresh_scheduler_only_expiring_within_minutes
+                    if session_refresh_scheduler_only_expiring_within_minutes is not None
+                    else current.get("session_refresh_scheduler_only_expiring_within_minutes", 60)
+                )
                 new_remote_timeout = max(5, int(new_remote_timeout)) if new_remote_timeout is not None else 60
                 new_personal_project_pool_size = max(1, min(50, int(new_personal_project_pool_size)))
                 new_personal_max_tabs = max(1, min(50, int(new_personal_max_tabs)))  # 限制1-50
                 new_personal_idle_ttl = max(60, int(new_personal_idle_ttl))  # 最少60秒
+                new_session_refresh_wait_seconds_per_url = max(0, min(600, int(new_session_refresh_wait_seconds_per_url)))
+                new_session_refresh_overall_timeout_seconds = max(10, min(1800, int(new_session_refresh_overall_timeout_seconds)))
+                new_session_refresh_scheduler_interval_minutes = max(1, min(1440, int(new_session_refresh_scheduler_interval_minutes)))
+                new_session_refresh_scheduler_batch_size = max(1, min(200, int(new_session_refresh_scheduler_batch_size)))
+                new_session_refresh_scheduler_only_expiring_within_minutes = max(
+                    1, min(10080, int(new_session_refresh_scheduler_only_expiring_within_minutes))
+                )
+                new_session_refresh_warmup_urls = (
+                    str(new_session_refresh_warmup_urls or "").strip()
+                    or "https://labs.google/fx/tools/flow,https://labs.google/fx"
+                )
 
                 await db.execute("""
                     UPDATE captcha_config
@@ -2469,6 +2668,13 @@ class Database:
                         personal_project_pool_size = ?,
                         personal_max_resident_tabs = ?, personal_idle_tab_ttl_seconds = ?,
                         browser_captcha_page_url = ?,
+                        session_refresh_enabled = ?, session_refresh_browser_first = ?,
+                        session_refresh_inject_st_cookie = ?, session_refresh_warmup_urls = ?,
+                        session_refresh_wait_seconds_per_url = ?, session_refresh_overall_timeout_seconds = ?,
+                        session_refresh_update_st_from_cookie = ?, session_refresh_fail_if_st_refresh_fails = ?,
+                        session_refresh_local_only = ?, session_refresh_scheduler_enabled = ?,
+                        session_refresh_scheduler_interval_minutes = ?, session_refresh_scheduler_batch_size = ?,
+                        session_refresh_scheduler_only_expiring_within_minutes = ?,
                         updated_at = CURRENT_TIMESTAMP
                     WHERE id = 1
                 """, (new_method, new_yes_key, new_yes_url, new_cap_key, new_cap_url,
@@ -2476,7 +2682,15 @@ class Database:
                       (new_remote_base_url or "").strip(), (new_remote_api_key or "").strip(), new_remote_timeout,
                       bool(new_browser_fallback),
                       new_proxy_enabled, new_proxy_url, new_browser_count, new_personal_project_pool_size,
-                      new_personal_max_tabs, new_personal_idle_ttl, new_browser_captcha_page_url))
+                      new_personal_max_tabs, new_personal_idle_ttl, new_browser_captcha_page_url,
+                      bool(new_session_refresh_enabled), bool(new_session_refresh_browser_first),
+                      bool(new_session_refresh_inject_st_cookie), new_session_refresh_warmup_urls,
+                      new_session_refresh_wait_seconds_per_url, new_session_refresh_overall_timeout_seconds,
+                      bool(new_session_refresh_update_st_from_cookie),
+                      bool(new_session_refresh_fail_if_st_refresh_fails),
+                      bool(new_session_refresh_local_only), bool(new_session_refresh_scheduler_enabled),
+                      new_session_refresh_scheduler_interval_minutes, new_session_refresh_scheduler_batch_size,
+                      new_session_refresh_scheduler_only_expiring_within_minutes))
             else:
                 new_method = captcha_method if captcha_method is not None else "yescaptcha"
                 new_yes_key = yescaptcha_api_key if yescaptcha_api_key is not None else ""
@@ -2512,6 +2726,41 @@ class Database:
                 new_personal_project_pool_size = max(1, min(50, int(new_personal_project_pool_size)))
                 new_personal_max_tabs = max(1, min(50, int(new_personal_max_tabs)))
                 new_personal_idle_ttl = max(60, int(new_personal_idle_ttl))
+                new_session_refresh_enabled = bool(session_refresh_enabled) if session_refresh_enabled is not None else True
+                new_session_refresh_browser_first = bool(session_refresh_browser_first) if session_refresh_browser_first is not None else True
+                new_session_refresh_inject_st_cookie = bool(session_refresh_inject_st_cookie) if session_refresh_inject_st_cookie is not None else True
+                new_session_refresh_warmup_urls = (
+                    str(session_refresh_warmup_urls or "").strip()
+                    if session_refresh_warmup_urls is not None
+                    else "https://labs.google/fx/tools/flow,https://labs.google/fx"
+                ) or "https://labs.google/fx/tools/flow,https://labs.google/fx"
+                new_session_refresh_wait_seconds_per_url = max(
+                    0, min(600, int(session_refresh_wait_seconds_per_url if session_refresh_wait_seconds_per_url is not None else 60))
+                )
+                new_session_refresh_overall_timeout_seconds = max(
+                    10, min(1800, int(session_refresh_overall_timeout_seconds if session_refresh_overall_timeout_seconds is not None else 180))
+                )
+                new_session_refresh_update_st_from_cookie = bool(session_refresh_update_st_from_cookie) if session_refresh_update_st_from_cookie is not None else True
+                new_session_refresh_fail_if_st_refresh_fails = bool(session_refresh_fail_if_st_refresh_fails) if session_refresh_fail_if_st_refresh_fails is not None else True
+                new_session_refresh_local_only = bool(session_refresh_local_only) if session_refresh_local_only is not None else True
+                new_session_refresh_scheduler_enabled = bool(session_refresh_scheduler_enabled) if session_refresh_scheduler_enabled is not None else False
+                new_session_refresh_scheduler_interval_minutes = max(
+                    1, min(1440, int(session_refresh_scheduler_interval_minutes if session_refresh_scheduler_interval_minutes is not None else 30))
+                )
+                new_session_refresh_scheduler_batch_size = max(
+                    1, min(200, int(session_refresh_scheduler_batch_size if session_refresh_scheduler_batch_size is not None else 10))
+                )
+                new_session_refresh_scheduler_only_expiring_within_minutes = max(
+                    1,
+                    min(
+                        10080,
+                        int(
+                            session_refresh_scheduler_only_expiring_within_minutes
+                            if session_refresh_scheduler_only_expiring_within_minutes is not None
+                            else 60
+                        ),
+                    ),
+                )
 
                 await db.execute("""
                     INSERT INTO captcha_config (id, captcha_method, yescaptcha_api_key, yescaptcha_base_url,
@@ -2522,14 +2771,28 @@ class Database:
                         browser_proxy_enabled, browser_proxy_url, browser_count,
                         personal_project_pool_size,
                         personal_max_resident_tabs, personal_idle_tab_ttl_seconds,
-                        browser_captcha_page_url)
-                    VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        browser_captcha_page_url,
+                        session_refresh_enabled, session_refresh_browser_first,
+                        session_refresh_inject_st_cookie, session_refresh_warmup_urls,
+                        session_refresh_wait_seconds_per_url, session_refresh_overall_timeout_seconds,
+                        session_refresh_update_st_from_cookie, session_refresh_fail_if_st_refresh_fails,
+                        session_refresh_local_only, session_refresh_scheduler_enabled,
+                        session_refresh_scheduler_interval_minutes, session_refresh_scheduler_batch_size,
+                        session_refresh_scheduler_only_expiring_within_minutes)
+                    VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (new_method, new_yes_key, new_yes_url, new_cap_key, new_cap_url,
                       new_ez_key, new_ez_url, new_cs_key, new_cs_url,
                       (new_remote_base_url or "").strip(), (new_remote_api_key or "").strip(), new_remote_timeout,
                       new_browser_fallback,
                       new_proxy_enabled, new_proxy_url, new_browser_count, new_personal_project_pool_size,
-                      new_personal_max_tabs, new_personal_idle_ttl, new_browser_captcha_page_url))
+                      new_personal_max_tabs, new_personal_idle_ttl, new_browser_captcha_page_url,
+                      new_session_refresh_enabled, new_session_refresh_browser_first,
+                      new_session_refresh_inject_st_cookie, new_session_refresh_warmup_urls,
+                      new_session_refresh_wait_seconds_per_url, new_session_refresh_overall_timeout_seconds,
+                      new_session_refresh_update_st_from_cookie, new_session_refresh_fail_if_st_refresh_fails,
+                      new_session_refresh_local_only, new_session_refresh_scheduler_enabled,
+                      new_session_refresh_scheduler_interval_minutes, new_session_refresh_scheduler_batch_size,
+                      new_session_refresh_scheduler_only_expiring_within_minutes))
 
             await db.commit()
 

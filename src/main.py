@@ -1,5 +1,6 @@
 """FastAPI application initialization"""
 import os
+from datetime import datetime, timezone
 
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
@@ -207,6 +208,50 @@ async def lifespan(app: FastAPI):
 
     auto_unban_task_handle = asyncio.create_task(auto_unban_task())
 
+    async def scheduled_token_refresh_task():
+        """Configurable scheduled token refresh that reuses existing refresh path."""
+        while True:
+            try:
+                interval_minutes = max(1, int(config.session_refresh_scheduler_interval_minutes))
+                await asyncio.sleep(interval_minutes * 60)
+                if not config.session_refresh_scheduler_enabled:
+                    continue
+
+                all_tokens = await token_manager.get_active_tokens()
+                if not all_tokens:
+                    continue
+
+                expiring_within_minutes = max(
+                    1,
+                    int(config.session_refresh_scheduler_only_expiring_within_minutes),
+                )
+                expiring_window = expiring_within_minutes * 60
+                now = datetime.now(timezone.utc)
+                candidates = []
+                for token in all_tokens:
+                    if not token:
+                        continue
+                    if token.at_expires is None:
+                        candidates.append(token)
+                        continue
+                    exp = token.at_expires
+                    if exp.tzinfo is None:
+                        exp = exp.replace(tzinfo=timezone.utc)
+                    remaining = (exp - now).total_seconds()
+                    if remaining <= expiring_window:
+                        candidates.append(token)
+
+                batch_size = max(1, int(config.session_refresh_scheduler_batch_size))
+                for token in candidates[:batch_size]:
+                    try:
+                        await token_manager._refresh_at(token.id)
+                    except Exception as refresh_err:
+                        print(f"⚠ Scheduled refresh failed for token {token.id}: {refresh_err}")
+            except Exception as e:
+                print(f"❌ Scheduled token refresh task error: {e}")
+
+    scheduled_token_refresh_handle = asyncio.create_task(scheduled_token_refresh_task())
+
     print(f"✓ Database initialized")
     print(f"✓ Total tokens: {len(tokens)}")
     ct = config.cache_timeout
@@ -217,6 +262,7 @@ async def lifespan(app: FastAPI):
     else:
         print("✓ File cache cleanup task disabled (timeout <= 0)")
     print(f"✓ 429 auto-unban task started (runs every hour)")
+    print("✓ Scheduled token refresh task started")
     print(f"✓ Server running on http://{config.server_host}:{config.server_port}")
     print("=" * 60)
 
@@ -232,12 +278,19 @@ async def lifespan(app: FastAPI):
         await auto_unban_task_handle
     except asyncio.CancelledError:
         pass
+    # Stop scheduled token refresh task
+    scheduled_token_refresh_handle.cancel()
+    try:
+        await scheduled_token_refresh_handle
+    except asyncio.CancelledError:
+        pass
     # Close browser if initialized
     if browser_service:
         await browser_service.close()
         print("✓ Browser captcha service closed")
     print("✓ File cache cleanup task stopped")
     print("✓ 429 auto-unban task stopped")
+    print("✓ Scheduled token refresh task stopped")
 
 
 # Initialize components

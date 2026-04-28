@@ -1831,23 +1831,30 @@ async def update_generation_timeout(
 
 @router.get("/api/token-refresh/config")
 async def get_token_refresh_config(token: str = Depends(verify_admin_token)):
-    """Get AT auto refresh configuration (默认启用)"""
+    """Get scheduled AT auto refresh configuration."""
+    captcha_config = await db.get_captcha_config()
     return {
         "success": True,
         "config": {
-            "at_auto_refresh_enabled": True  # Flow2API默认启用AT自动刷新
+            "at_auto_refresh_enabled": bool(
+                getattr(captcha_config, "session_refresh_scheduler_enabled", False)
+            )
         }
     }
 
 
 @router.post("/api/token-refresh/enabled")
 async def update_token_refresh_enabled(
+    request: dict,
     token: str = Depends(verify_admin_token)
 ):
-    """Update AT auto refresh enabled (Flow2API固定启用,此接口仅用于前端兼容)"""
+    """Update scheduled AT auto refresh enabled."""
+    enabled = bool(request.get("enabled", False))
+    await db.update_captcha_config(session_refresh_scheduler_enabled=enabled)
+    await db.reload_config_to_memory()
     return {
         "success": True,
-        "message": "Flow2API的AT自动刷新默认启用且无法关闭"
+        "message": f"定时自动刷新已{'启用' if enabled else '禁用'}"
     }
 
 
@@ -2034,6 +2041,19 @@ async def update_captcha_config(
     personal_max_resident_tabs = request.get("personal_max_resident_tabs")
     personal_idle_tab_ttl_seconds = request.get("personal_idle_tab_ttl_seconds")
     browser_captcha_page_url = request.get("browser_captcha_page_url")
+    session_refresh_enabled = request.get("session_refresh_enabled")
+    session_refresh_browser_first = request.get("session_refresh_browser_first")
+    session_refresh_inject_st_cookie = request.get("session_refresh_inject_st_cookie")
+    session_refresh_warmup_urls = request.get("session_refresh_warmup_urls")
+    session_refresh_wait_seconds_per_url = request.get("session_refresh_wait_seconds_per_url")
+    session_refresh_overall_timeout_seconds = request.get("session_refresh_overall_timeout_seconds")
+    session_refresh_update_st_from_cookie = request.get("session_refresh_update_st_from_cookie")
+    session_refresh_fail_if_st_refresh_fails = request.get("session_refresh_fail_if_st_refresh_fails")
+    session_refresh_local_only = request.get("session_refresh_local_only")
+    session_refresh_scheduler_enabled = request.get("session_refresh_scheduler_enabled")
+    session_refresh_scheduler_interval_minutes = request.get("session_refresh_scheduler_interval_minutes")
+    session_refresh_scheduler_batch_size = request.get("session_refresh_scheduler_batch_size")
+    session_refresh_scheduler_only_expiring_within_minutes = request.get("session_refresh_scheduler_only_expiring_within_minutes")
 
     # 验证浏览器打码页面 URL
     if browser_captcha_page_url is not None:
@@ -2092,6 +2112,23 @@ async def update_captcha_config(
         personal_max_resident_tabs=personal_max_resident_tabs,
         personal_idle_tab_ttl_seconds=personal_idle_tab_ttl_seconds,
         browser_captcha_page_url=browser_captcha_page_url,
+        session_refresh_enabled=session_refresh_enabled,
+        session_refresh_browser_first=session_refresh_browser_first,
+        session_refresh_inject_st_cookie=session_refresh_inject_st_cookie,
+        session_refresh_warmup_urls=(
+            ",".join(str(item).strip() for item in session_refresh_warmup_urls if str(item).strip())
+            if isinstance(session_refresh_warmup_urls, list)
+            else session_refresh_warmup_urls
+        ),
+        session_refresh_wait_seconds_per_url=session_refresh_wait_seconds_per_url,
+        session_refresh_overall_timeout_seconds=session_refresh_overall_timeout_seconds,
+        session_refresh_update_st_from_cookie=session_refresh_update_st_from_cookie,
+        session_refresh_fail_if_st_refresh_fails=session_refresh_fail_if_st_refresh_fails,
+        session_refresh_local_only=session_refresh_local_only,
+        session_refresh_scheduler_enabled=session_refresh_scheduler_enabled,
+        session_refresh_scheduler_interval_minutes=session_refresh_scheduler_interval_minutes,
+        session_refresh_scheduler_batch_size=session_refresh_scheduler_batch_size,
+        session_refresh_scheduler_only_expiring_within_minutes=session_refresh_scheduler_only_expiring_within_minutes,
     )
 
     # 🔥 Hot reload: sync database config to memory
@@ -2147,6 +2184,46 @@ async def get_captcha_config(token: str = Depends(verify_admin_token)):
         "browser_captcha_page_url": (
             (getattr(captcha_config, "browser_captcha_page_url", None) or "").strip()
             or "https://labs.google/fx/api/auth/providers"
+        ),
+        "session_refresh_enabled": bool(getattr(captcha_config, "session_refresh_enabled", True)),
+        "session_refresh_browser_first": bool(getattr(captcha_config, "session_refresh_browser_first", True)),
+        "session_refresh_inject_st_cookie": bool(getattr(captcha_config, "session_refresh_inject_st_cookie", True)),
+        "session_refresh_warmup_urls": [
+            item.strip()
+            for item in str(
+                getattr(
+                    captcha_config,
+                    "session_refresh_warmup_urls",
+                    "https://labs.google/fx/tools/flow,https://labs.google/fx",
+                )
+                or ""
+            ).split(",")
+            if item.strip()
+        ],
+        "session_refresh_wait_seconds_per_url": int(
+            getattr(captcha_config, "session_refresh_wait_seconds_per_url", 60) or 60
+        ),
+        "session_refresh_overall_timeout_seconds": int(
+            getattr(captcha_config, "session_refresh_overall_timeout_seconds", 180) or 180
+        ),
+        "session_refresh_update_st_from_cookie": bool(
+            getattr(captcha_config, "session_refresh_update_st_from_cookie", True)
+        ),
+        "session_refresh_fail_if_st_refresh_fails": bool(
+            getattr(captcha_config, "session_refresh_fail_if_st_refresh_fails", True)
+        ),
+        "session_refresh_local_only": bool(getattr(captcha_config, "session_refresh_local_only", True)),
+        "session_refresh_scheduler_enabled": bool(
+            getattr(captcha_config, "session_refresh_scheduler_enabled", False)
+        ),
+        "session_refresh_scheduler_interval_minutes": int(
+            getattr(captcha_config, "session_refresh_scheduler_interval_minutes", 30) or 30
+        ),
+        "session_refresh_scheduler_batch_size": int(
+            getattr(captcha_config, "session_refresh_scheduler_batch_size", 10) or 10
+        ),
+        "session_refresh_scheduler_only_expiring_within_minutes": int(
+            getattr(captcha_config, "session_refresh_scheduler_only_expiring_within_minutes", 60) or 60
         ),
     }
 
