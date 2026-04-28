@@ -1584,6 +1584,25 @@ async def update_managed_api_key(
     request: UpdateManagedApiKeyRequest,
     token: str = Depends(verify_admin_token),
 ):
+    # Keep account mappings clean even when account_ids are not edited.
+    await db.prune_stale_api_key_accounts(key_id)
+
+    valid_account_ids = request.account_ids
+    if request.account_ids is not None:
+        cleaned_ids = sorted({int(x) for x in request.account_ids if int(x) > 0})
+        if cleaned_ids:
+            missing_ids = []
+            for account_id in cleaned_ids:
+                token_obj = await db.get_token(account_id)
+                if token_obj is None:
+                    missing_ids.append(account_id)
+            if missing_ids:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Some account_ids do not exist: {missing_ids}",
+                )
+        valid_account_ids = cleaned_ids
+
     await db.update_api_key(
         key_id,
         client_name=request.client_name,
@@ -1591,7 +1610,7 @@ async def update_managed_api_key(
         is_active=request.is_active,
         scopes=request.scopes,
         expires_at=request.expires_at,
-        account_ids=request.account_ids,
+        account_ids=valid_account_ids,
         endpoint_limits=request.endpoint_limits,
     )
     return {"success": True, "message": "Managed API key updated"}

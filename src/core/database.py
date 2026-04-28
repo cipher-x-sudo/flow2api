@@ -2644,14 +2644,40 @@ class Database:
             row = await cursor.fetchone()
             return dict(row) if row else None
 
-    async def get_api_key_account_ids(self, key_id: int) -> List[int]:
+    async def get_api_key_account_ids(self, key_id: int, existing_only: bool = False) -> List[int]:
         async with self._connect() as db:
-            cursor = await db.execute(
-                "SELECT account_id FROM api_key_accounts WHERE api_key_id = ? ORDER BY account_id ASC",
-                (key_id,),
-            )
+            if existing_only:
+                cursor = await db.execute(
+                    """
+                    SELECT aka.account_id
+                    FROM api_key_accounts aka
+                    JOIN tokens t ON t.id = aka.account_id
+                    WHERE aka.api_key_id = ?
+                    ORDER BY aka.account_id ASC
+                    """,
+                    (key_id,),
+                )
+            else:
+                cursor = await db.execute(
+                    "SELECT account_id FROM api_key_accounts WHERE api_key_id = ? ORDER BY account_id ASC",
+                    (key_id,),
+                )
             rows = await cursor.fetchall()
             return [int(row[0]) for row in rows]
+
+    async def prune_stale_api_key_accounts(self, key_id: int) -> int:
+        """Remove api_key_accounts rows whose account_id no longer exists in tokens."""
+        async with self._connect(write=True) as db:
+            cursor = await db.execute(
+                """
+                DELETE FROM api_key_accounts
+                WHERE api_key_id = ?
+                  AND account_id NOT IN (SELECT id FROM tokens)
+                """,
+                (key_id,),
+            )
+            await db.commit()
+            return int(cursor.rowcount or 0)
 
     async def get_api_key_rate_limits(self, key_id: int, endpoint: str) -> Dict[str, Any]:
         async with self._connect() as db:
@@ -2722,7 +2748,10 @@ class Database:
             rows = [dict(row) for row in await cursor.fetchall()]
 
             for row in rows:
-                row["account_ids"] = await self.get_api_key_account_ids(int(row["id"]))
+                row["account_ids"] = await self.get_api_key_account_ids(
+                    int(row["id"]),
+                    existing_only=True,
+                )
             return rows
 
     async def list_api_key_rate_limits(self, key_id: int) -> List[Dict[str, Any]]:
@@ -2836,7 +2865,10 @@ class Database:
             if not row:
                 return None
             data = dict(row)
-            data["account_ids"] = await self.get_api_key_account_ids(key_id)
+            data["account_ids"] = await self.get_api_key_account_ids(
+                key_id,
+                existing_only=True,
+            )
             data["endpoint_limits"] = await self.list_api_key_rate_limits(key_id)
             return data
 
