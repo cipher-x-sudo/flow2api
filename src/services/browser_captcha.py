@@ -2133,6 +2133,17 @@ class BrowserCaptchaService:
         token_proxy_url = await self._resolve_token_proxy_url(token_id)
         max_attempts = 2
 
+        async def _extract_session_cookie(context) -> Optional[str]:
+            cookies = await context.cookies()
+            for cookie in cookies:
+                name = str(cookie.get("name") or "").strip()
+                if name != "__Secure-next-auth.session-token":
+                    continue
+                value = str(cookie.get("value") or "").strip()
+                if value:
+                    return value
+            return None
+
         async def _refresh_with_slot(slot_id: int) -> Optional[str]:
             browser = await self._get_or_create_browser(slot_id)
             page = None
@@ -2149,24 +2160,48 @@ class BrowserCaptchaService:
                 except Exception:
                     pass
                 await asyncio.sleep(2)
+                session_token = await _extract_session_cookie(context)
+                if session_token:
+                    elapsed_ms = int((time.time() - started_at) * 1000)
+                    debug_logger.log_info(
+                        f"[BrowserCaptcha] refreshed session token from slot {slot_id} ({elapsed_ms}ms)"
+                    )
+                    return session_token
 
-                cookies = await context.cookies()
-                for cookie in cookies:
-                    name = str(cookie.get("name") or "").strip()
-                    if name == "__Secure-next-auth.session-token":
-                        value = str(cookie.get("value") or "").strip()
-                        if value:
-                            elapsed_ms = int((time.time() - started_at) * 1000)
-                            debug_logger.log_info(
-                                f"[BrowserCaptcha] refreshed session token from slot {slot_id} ({elapsed_ms}ms)"
-                            )
-                            return value
+                # One extra refresh/read pass before failing hard.
+                try:
+                    await page.reload(wait_until="domcontentloaded", timeout=20000)
+                except Exception:
+                    pass
+                await asyncio.sleep(1.5)
+                session_token = await _extract_session_cookie(context)
+                if session_token:
+                    elapsed_ms = int((time.time() - started_at) * 1000)
+                    debug_logger.log_info(
+                        f"[BrowserCaptcha] refreshed session token from slot {slot_id} on second pass ({elapsed_ms}ms)"
+                    )
+                    return session_token
 
                 debug_logger.log_warning(
-                    f"[BrowserCaptcha] slot {slot_id} has no __Secure-next-auth.session-token cookie"
+                    f"[BrowserCaptcha] slot {slot_id} has no __Secure-next-auth.session-token cookie "
+                    f"(st_refresh_reason=no_cookie)"
                 )
                 return None
             except Exception as e:
+                msg = str(e)
+                is_target_closed = "TargetClosedError" in msg or "has been closed" in msg
+                if is_target_closed:
+                    debug_logger.log_warning(
+                        f"[BrowserCaptcha] refresh_session_token slot {slot_id} context closed; recycling slot "
+                        f"(st_refresh_reason=target_closed)"
+                    )
+                    try:
+                        await browser.recycle_browser(reason="refresh_session_target_closed", rotate_profile=False)
+                    except Exception as recycle_err:
+                        debug_logger.log_warning(
+                            f"[BrowserCaptcha] recycle after target_closed failed on slot {slot_id}: "
+                            f"{type(recycle_err).__name__}: {str(recycle_err)[:180]}"
+                        )
                 debug_logger.log_warning(
                     f"[BrowserCaptcha] refresh_session_token failed on slot {slot_id}: {type(e).__name__}: {str(e)[:200]}"
                 )
