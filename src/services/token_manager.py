@@ -583,30 +583,20 @@ class TokenManager:
         try:
             from ..core.config import config
 
-            # 仅在 personal / browser 模式下支持 ST 自动刷新
-            if config.captcha_method not in {"personal", "browser"}:
-                debug_logger.log_info(
-                    f"[ST_REFRESH] 模式={config.captcha_method}，跳过 ST 自动刷新（仅 personal/browser 支持）"
-                )
-                return None
-
             if not token.current_project_id:
                 debug_logger.log_warning(f"[ST_REFRESH] Token {token_id} 没有 project_id，无法刷新 ST")
                 return None
 
             debug_logger.log_info(
-                f"[ST_REFRESH] Token {token_id}: 尝试通过浏览器刷新 ST (mode={config.captcha_method})..."
+                f"[ST_REFRESH] Token {token_id}: 尝试通过浏览器刷新 ST "
+                f"(mode={config.captcha_method}, force_headed_browser=True)..."
             )
 
-            if config.captcha_method == "personal":
-                from .browser_captcha_personal import BrowserCaptchaService
-                service = await BrowserCaptchaService.get_instance(self.db)
-                refresh_kwargs = {}
-            else:
-                from .browser_captcha import BrowserCaptchaService
-                service = await BrowserCaptchaService.get_instance(self.db)
-                # Browser headed mode supports token-level proxy resolution during ST refresh.
-                refresh_kwargs = {"token_id": token_id}
+            # Force headed-browser refresh path for AT fallback ST refresh.
+            from .browser_captcha import BrowserCaptchaService
+            service = await BrowserCaptchaService.get_instance(self.db)
+            # Headed-browser mode supports token-level proxy resolution during ST refresh.
+            refresh_kwargs = {"token_id": token_id}
 
             refresh_timeout_seconds = 45.0
             try:
