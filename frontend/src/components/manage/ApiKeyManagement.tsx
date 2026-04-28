@@ -319,6 +319,12 @@ export function ApiKeyManagement() {
       a.active_project_id || a.current_project_id || null,
     ])
   )
+  const activeProjectNameByToken = new Map(
+    keyProjectAccounts.map((a) => [
+      a.token_id,
+      a.active_project_name || a.current_project_name || null,
+    ])
+  )
 
   const submitEditKey = async () => {
     if (!token || editingKeyId == null) return
@@ -686,8 +692,19 @@ export function ApiKeyManagement() {
               <div className="max-h-52 overflow-auto space-y-2">
                 {tokens.map((t) => (
                   <label key={`edit-account-${t.id}`} className="flex items-center justify-between gap-3 text-sm">
-                    <span>
-                      #{t.id} {t.email || ""}
+                    <span className="min-w-0">
+                      <span className="block truncate">
+                        #{t.id} {t.email || ""}
+                      </span>
+                      {activeProjectByToken.get(t.id) ? (
+                        <span
+                          className="block truncate font-mono text-[10px] text-muted-foreground"
+                          title={`${activeProjectByToken.get(t.id) || ""} ${activeProjectNameByToken.get(t.id) || ""}`.trim()}
+                        >
+                          active project: {activeProjectByToken.get(t.id)}
+                          {activeProjectNameByToken.get(t.id) ? ` (${activeProjectNameByToken.get(t.id)})` : ""}
+                        </span>
+                      ) : null}
                     </span>
                     <div className="flex items-center gap-2">
                       <Badge variant={t.is_active ? "default" : "secondary"}>{t.is_active ? "active" : "disabled"}</Badge>
