@@ -447,19 +447,23 @@ class TokenManager:
             if not token:
                 return False
 
-            result = await self._do_refresh_at(token_id, token.st, previous_at_expires=token.at_expires)
+            debug_logger.log_info(
+                f"[AT_REFRESH] Token {token_id}: browser-first policy active, refreshing ST before AT refresh..."
+            )
+            new_st = await self._try_refresh_st(token_id, token)
+            if not new_st:
+                debug_logger.log_error(
+                    f"[AT_REFRESH] Token {token_id}: browser-first ST refresh failed (local+gateway), aborting AT refresh"
+                )
+                await self.disable_token(token_id)
+                return False
+
+            debug_logger.log_info(f"[AT_REFRESH] Token {token_id}: ST refreshed, starting AT refresh...")
+            current_after_st = await self.db.get_token(token_id)
+            previous_expires = current_after_st.at_expires if current_after_st else token.at_expires
+            result = await self._do_refresh_at(token_id, new_st, previous_at_expires=previous_expires)
             if result:
                 return True
-
-            debug_logger.log_info(f"[AT_REFRESH] Token {token_id}: first AT refresh failed, trying ST refresh...")
-            new_st = await self._try_refresh_st(token_id, token)
-            if new_st:
-                debug_logger.log_info(f"[AT_REFRESH] Token {token_id}: ST refreshed, retrying AT refresh...")
-                current_after_st = await self.db.get_token(token_id)
-                previous_expires = current_after_st.at_expires if current_after_st else token.at_expires
-                result = await self._do_refresh_at(token_id, new_st, previous_at_expires=previous_expires)
-                if result:
-                    return True
 
             debug_logger.log_error(f"[AT_REFRESH] Token {token_id}: all refresh attempts failed, disabling token")
             await self.disable_token(token_id)
