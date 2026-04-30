@@ -37,8 +37,12 @@ mask_token = true
 recaptcha_trace = false
 # Mirror reCAPTCHA trace lines to stdout (useful next to headed Playwright).
 recaptcha_console = false
+recaptcha_banner = false
+recaptcha_phase_timings = false
 
 [proxy]
+# Outbound proxy for Flow / sandbox HTTP (optional). Supports http://, https://, socks5://, socks5h:// (DNS via proxy).
+# Example: proxy_url = "socks5h://127.0.0.1:1080" — leave proxy_enabled = false until you intend to use it.
 proxy_enabled = false
 proxy_url = ""
 
@@ -60,7 +64,8 @@ timeout = 7200  # 缓存超时时间(秒), 默认2小时; 设置为0表示不自
 base_url = ""   # 缓存文件访问的基础URL, 留空则按请求/本机回退
 
 [captcha]
-captcha_method = "browser"  # 打码方式: yescaptcha/browser/personal/remote_browser
+# 打码方式: browser（默认）| personal | remote_browser | yescaptcha | capmonster | ezcaptcha | capsolver
+captcha_method = "browser"
 # browser 模式打开的首页：默认 auth/providers（轻量）；有头 Docker 等可改为 https://labs.google/fx/tools/flow
 browser_captcha_page_url = "https://labs.google/fx/api/auth/providers"
 browser_launch_background = true  # 有头浏览器是否默认后台启动；设为 false 可直接看到窗口
@@ -70,8 +75,15 @@ browser_count = 1  # browser 模式的有头浏览器实例数量
 personal_project_pool_size = 4  # personal 模式下单个 Token 默认维护的项目池数量（仅影响项目轮换，不决定打码标签页数量）
 personal_max_resident_tabs = 5  # personal 模式共享打码标签页上限，所有 Token/project 共用这组 tab
 personal_idle_tab_ttl_seconds = 600  # personal 模式标签页空闲回收时间(秒)
+# --- 第三方 API 打码（仅当 captcha_method 设为对应服务时需要填写）---
 yescaptcha_api_key = ""  # YesCaptcha API密钥
 yescaptcha_base_url = "https://api.yescaptcha.com"
+capmonster_api_key = ""
+capmonster_base_url = "https://api.capmonster.cloud"
+ezcaptcha_api_key = ""
+ezcaptcha_base_url = "https://api.ez-captcha.com"
+capsolver_api_key = ""
+capsolver_base_url = "https://api.capsolver.com"
 # Docker 自建 Agent Gateway: 合并 docker-compose.yml 与 docker-compose.agent.yml
 # 见 docs/agent-gateway.md。容器网内填 http://agent-gateway:9080，key 与 GATEWAY_FLOW2API_BEARER 一致
 remote_browser_base_url = ""  # 远程有头打码 / Agent Gateway 基地址

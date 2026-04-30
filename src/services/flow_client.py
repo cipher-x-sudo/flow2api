@@ -1853,6 +1853,175 @@ class FlowClient:
         # 所有重试都失败
         raise last_error
 
+    async def generate_video_extend(
+        self,
+        at: str,
+        project_id: str,
+        prompt: str,
+        model_key: str,
+        aspect_ratio: str,
+        video_media_id: str,
+        user_paygate_tier: str = "PAYGATE_TIER_ONE",
+        token_id: Optional[int] = None,
+        token_video_concurrency: Optional[int] = None,
+    ) -> dict:
+        """视频续写,基于已生成的视频延伸7秒"""
+        url = f"{self.api_base_url}/video:batchAsyncGenerateVideoExtendVideo"
+        max_retries = 3
+        last_error = None
+        for retry_attempt in range(max_retries):
+            launch_gate_acquired = False
+            launch_ok, _, _ = await self._acquire_video_launch_gate(
+                token_id=token_id,
+                token_video_concurrency=token_video_concurrency,
+            )
+            if not launch_ok:
+                last_error = Exception("Video launch queue wait timeout")
+                raise last_error
+            launch_gate_acquired = True
+            try:
+                recaptcha_token, browser_id = await self._get_recaptcha_token(
+                    project_id,
+                    action="VIDEO_GENERATION",
+                    token_id=token_id,
+                )
+            finally:
+                if launch_gate_acquired:
+                    await self._release_video_launch_gate(token_id)
+            if not recaptcha_token:
+                last_error = Exception("Failed to obtain reCAPTCHA token")
+                should_retry = await self._handle_missing_recaptcha_token(
+                    retry_attempt=retry_attempt,
+                    max_retries=max_retries,
+                    browser_id=browser_id,
+                    project_id=project_id,
+                    log_prefix="[VIDEO EXTEND] 续写",
+                )
+                if should_retry:
+                    continue
+                raise last_error
+            session_id = self._generate_session_id()
+            workflow_id = str(uuid.uuid4())
+            json_data = {
+                "clientContext": {
+                    "recaptchaContext": {
+                        "token": recaptcha_token,
+                        "applicationType": "RECAPTCHA_APPLICATION_TYPE_WEB",
+                    },
+                    "sessionId": session_id,
+                    "projectId": project_id,
+                    "tool": "PINHOLE",
+                    "userPaygateTier": user_paygate_tier,
+                },
+                "mediaGenerationContext": {"batchId": str(uuid.uuid4())},
+                "requests": [{
+                    "aspectRatio": aspect_ratio,
+                    "seed": random.randint(1, 99999),
+                    "textInput": {"structuredPrompt": {"parts": [{"text": prompt}]}},
+                    "videoInput": {"mediaId": video_media_id},
+                    "videoModelKey": model_key,
+                    "metadata": {"workflowId": workflow_id},
+                }],
+                "useV2ModelConfig": True,
+            }
+            try:
+                return await self._make_request(
+                    method="POST",
+                    url=url,
+                    json_data=json_data,
+                    use_at=True,
+                    at_token=at,
+                )
+            except Exception as e:
+                last_error = e
+                should_retry = await self._handle_retryable_generation_error(
+                    error=e,
+                    retry_attempt=retry_attempt,
+                    max_retries=max_retries,
+                    browser_id=browser_id,
+                    project_id=project_id,
+                    log_prefix="[VIDEO EXTEND] 续写",
+                )
+                if should_retry:
+                    continue
+                raise
+            finally:
+                await self._notify_browser_captcha_request_finished(browser_id)
+        raise last_error
+
+    async def run_concatenation(
+        self,
+        at: str,
+        original_media_id: str,
+        extend_media_id: str,
+    ) -> dict:
+        """调用 Google runVideoFxConcatenation API 拼接视频"""
+        url = f"{self.api_base_url}:runVideoFxConcatenation"
+        json_data = {
+            "inputVideos": [
+                {
+                    "mediaGenerationId": original_media_id,
+                    "lengthNanos": 8000,
+                    "startTimeOffset": "0s",
+                    "endTimeOffset": "8s",
+                },
+                {
+                    "mediaGenerationId": extend_media_id,
+                    "lengthNanos": 8000,
+                    "startTimeOffset": "1s",
+                    "endTimeOffset": "8s",
+                },
+            ]
+        }
+        return await self._make_request(
+            method="POST",
+            url=url,
+            json_data=json_data,
+            use_at=True,
+            at_token=at,
+        )
+
+    async def poll_concatenation_status(
+        self,
+        at: str,
+        operation_name: str,
+        timeout: int = 300,
+        poll_interval: int = 3,
+    ) -> dict:
+        """轮询拼接任务状态，直到完成或超时"""
+        url = f"{self.api_base_url}:runVideoFxCheckConcatenationStatus"
+        json_data = {"operation": {"operation": {"name": operation_name}}}
+        start_time = time.time()
+        while time.time() - start_time < timeout:
+            result = await self._make_request(
+                method="POST",
+                url=url,
+                json_data=json_data,
+                use_at=True,
+                at_token=at,
+                timeout=300,
+            )
+            status = result.get("status", "")
+            output_uri = result.get("outputUri", "")
+            encoded_video = result.get("encodedVideo", "")
+            if output_uri:
+                return result
+            if encoded_video and "SUCCESSFUL" in status:
+                video_bytes = base64.b64decode(encoded_video)
+                video_filename = f"concat_{uuid.uuid4().hex[:12]}.mp4"
+                save_dir = "tmp"
+                os.makedirs(save_dir, exist_ok=True)
+                save_path = os.path.join(save_dir, video_filename)
+                with open(save_path, "wb") as f:
+                    f.write(video_bytes)
+                result["outputUri"] = f"/tmp/{video_filename}"
+                result["local_file"] = save_path
+                return result
+            if "FAILED" in status or "ERROR" in status:
+                raise Exception(f"视频拼接失败: {status}")
+            await asyncio.sleep(poll_interval)
+        raise Exception(f"视频拼接超时 ({timeout}s)")
+
     # ========== 视频放大 (Video Upsampler) ==========
 
     async def upsample_video(

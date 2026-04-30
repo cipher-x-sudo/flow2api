@@ -3,6 +3,7 @@ import asyncio
 import base64
 import json
 import time
+import re
 from pathlib import Path
 from urllib.parse import quote
 from typing import Optional, AsyncGenerator, List, Dict, Any
@@ -309,6 +310,25 @@ MODEL_CONFIG = {
         "aspect_ratio": "VIDEO_ASPECT_RATIO_LANDSCAPE",
         "supports_images": False,
         "use_v2_model_config": True,
+        "allow_tier_upgrade": False
+    },
+
+
+    # ========== 视频续写 (Video Extend) ==========
+    "veo_3_1_extend_portrait": {
+        "type": "video",
+        "video_type": "extend",
+        "model_key": "veo_3_1_extend_fast_portrait_ultra",
+        "aspect_ratio": "VIDEO_ASPECT_RATIO_PORTRAIT",
+        "supports_images": False,
+        "allow_tier_upgrade": False
+    },
+    "veo_3_1_extend": {
+        "type": "video",
+        "video_type": "extend",
+        "model_key": "veo_3_1_extend_fast_ultra",
+        "aspect_ratio": "VIDEO_ASPECT_RATIO_LANDSCAPE",
+        "supports_images": False,
         "allow_tier_upgrade": False
     },
 
@@ -782,6 +802,7 @@ class GenerationHandler:
         allowed_token_ids: Optional[set[int]] = None,
         api_key_id: Optional[int] = None,
         requested_project_id: Optional[str] = None,
+        video_media_id: Optional[str] = None,
     ) -> AsyncGenerator:
         """统一生成入口
 
@@ -998,7 +1019,8 @@ class GenerationHandler:
                     generation_result=generation_result,
                     response_state=response_state,
                     request_log_state=request_log_state,
-                    pending_token_state=pending_token_state
+                    pending_token_state=pending_token_state,
+                    video_media_id=video_media_id
                 ):
                     yield chunk
             perf_trace["generation_pipeline_ms"] = int((time.time() - generation_pipeline_started_at) * 1000)
@@ -1166,7 +1188,8 @@ class GenerationHandler:
         generation_result: Optional[Dict[str, Any]] = None,
         response_state: Optional[Dict[str, Any]] = None,
         request_log_state: Optional[Dict[str, Any]] = None,
-        pending_token_state: Optional[Dict[str, bool]] = None
+        pending_token_state: Optional[Dict[str, bool]] = None,
+        video_media_id: Optional[str] = None
     ) -> AsyncGenerator:
         """处理图片生成 (同步返回)"""
 
@@ -1480,7 +1503,8 @@ class GenerationHandler:
         generation_result: Optional[Dict[str, Any]] = None,
         response_state: Optional[Dict[str, Any]] = None,
         request_log_state: Optional[Dict[str, Any]] = None,
-        pending_token_state: Optional[Dict[str, bool]] = None
+        pending_token_state: Optional[Dict[str, bool]] = None,
+        video_media_id: Optional[str] = None
     ) -> AsyncGenerator:
         """处理视频生成 (异步轮询)"""
 
@@ -1654,6 +1678,27 @@ class GenerationHandler:
                     token_video_concurrency=token.video_concurrency,
                 )
 
+            # Extend: 视频续写
+            elif video_type == "extend":
+                if not video_media_id:
+                    error_msg = "❌ 视频续写需要提供源视频的 mediaGenerationId，请在 image_url 中传入 extend://VIDEO_MEDIA_ID"
+                    if stream:
+                        yield self._create_stream_chunk(f"{error_msg}\n")
+                    self._mark_generation_failed(generation_result, error_msg)
+                    yield self._create_error_response(error_msg, status_code=400)
+                    return
+                result = await self.flow_client.generate_video_extend(
+                    at=token.at,
+                    project_id=project_id,
+                    prompt=prompt,
+                    video_media_id=video_media_id,
+                    model_key=model_config["model_key"],
+                    aspect_ratio=model_config["aspect_ratio"],
+                    user_paygate_tier=normalized_tier,
+                    token_id=token.id,
+                    token_video_concurrency=token.video_concurrency,
+                )
+
             # T2V 或 R2V无图: 纯文本生成
             else:
                 result = await self.flow_client.generate_video_text(
@@ -1707,6 +1752,7 @@ class GenerationHandler:
             # 检查是否需要放大
             upsample_config = model_config.get("upsample")
 
+            extend_source_id = video_media_id if video_type == "extend" else None
             async for chunk in self._poll_video_result(
                 token,
                 project_id,
@@ -1717,6 +1763,7 @@ class GenerationHandler:
                 generation_result,
                 response_state,
                 request_log_state,
+                extend_source_media_id=extend_source_id,
             ):
                 yield chunk
 
@@ -1733,7 +1780,8 @@ class GenerationHandler:
         api_key_id: Optional[int] = None,
         generation_result: Optional[Dict[str, Any]] = None,
         response_state: Optional[Dict[str, Any]] = None,
-        request_log_state: Optional[Dict[str, Any]] = None
+        request_log_state: Optional[Dict[str, Any]] = None,
+        extend_source_media_id: Optional[str] = None
     ) -> AsyncGenerator:
         """轮询视频生成结果
         
@@ -1784,6 +1832,9 @@ class GenerationHandler:
                     video_info = metadata.get("video", {})
                     video_url = video_info.get("fifeUrl")
                     video_media_id = video_info.get("mediaGenerationId")
+                    uuid_match = re.search(r"/video/([0-9a-f-]{36})", video_url or "")
+                    if uuid_match:
+                        video_media_id = uuid_match.group(1)
                     aspect_ratio = video_info.get("aspectRatio", "VIDEO_ASPECT_RATIO_LANDSCAPE")
 
                     if not video_url:
@@ -1819,7 +1870,16 @@ class GenerationHandler:
                                 
                                 # 递归轮询放大结果（不再放大）
                                 async for chunk in self._poll_video_result(
-                                    token, project_id, upsample_operations, stream, None, api_key_id, generation_result, response_state, request_log_state
+                                    token,
+                                    project_id,
+                                    upsample_operations,
+                                    stream,
+                                    None,
+                                    api_key_id,
+                                    generation_result,
+                                    response_state,
+                                    request_log_state,
+                                    extend_source_media_id=extend_source_media_id,
                                 ):
                                     yield chunk
                                 return
@@ -1830,6 +1890,30 @@ class GenerationHandler:
                             debug_logger.log_error(f"Video upsample failed: {str(e)}")
                             if stream:
                                 yield self._create_stream_chunk(f"⚠️ 放大失败: {str(e)}，返回原始视频\n")
+
+                    if extend_source_media_id and video_media_id:
+                        try:
+                            concat_result = await self.flow_client.run_concatenation(
+                                at=token.at,
+                                original_media_id=extend_source_media_id,
+                                extend_media_id=video_media_id,
+                            )
+                            concat_op = concat_result.get("operation", {}).get("operation", {}).get("name", "")
+                            if concat_op:
+                                concat_status = await self.flow_client.poll_concatenation_status(
+                                    at=token.at,
+                                    operation_name=concat_op,
+                                    timeout=300,
+                                    poll_interval=3,
+                                )
+                                concat_url = concat_status.get("outputUri", "")
+                                if concat_url:
+                                    if concat_url.startswith("/tmp/"):
+                                        host = "localhost" if (config.server_host or "") == "0.0.0.0" else (config.server_host or "localhost")
+                                        concat_url = f"http://{host}:{config.server_port}{concat_url}"
+                                    video_url = concat_url
+                        except Exception as e:
+                            debug_logger.log_error(f"[CONCAT] 拼接失败: {str(e)}")
 
                     # 缓存视频 (如果启用)
                     local_url = video_url
@@ -1875,7 +1959,8 @@ class GenerationHandler:
                     response_state["url"] = local_url
                     response_state["generated_assets"] = {
                         "type": "video",
-                        "final_video_url": local_url
+                        "final_video_url": local_url,
+                        "mediaGenerationId": video_media_id
                     }
 
                     # 返回结果
@@ -1883,7 +1968,7 @@ class GenerationHandler:
 
                     if stream:
                         yield self._create_stream_chunk(
-                            f"<video src='{local_url}' controls style='max-width:100%'></video>",
+                            f"<video src='{local_url}' data-media-id='{video_media_id}' controls style='max-width:100%'></video>",
                             finish_reason="stop",
                             extra_fields={"generated_assets": response_state.get("generated_assets")},
                         )

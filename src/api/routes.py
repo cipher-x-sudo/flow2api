@@ -88,6 +88,7 @@ class NormalizedGenerationRequest:
     prompt: str
     images: List[bytes]
     messages: Optional[List[ChatMessage]] = None
+    video_media_id: Optional[str] = None
     project_id: Optional[str] = None
 
 
@@ -373,11 +374,12 @@ async def _extract_prompt_and_images_from_openai_messages(
     messages: List[ChatMessage],
     api_key_id: Optional[int] = None,
     allowed_token_ids: Optional[Set[int]] = None,
-) -> tuple[str, List[bytes]]:
+) -> tuple[str, List[bytes], Optional[str]]:
     last_message = messages[-1]
     content = last_message.content
     prompt_parts: List[str] = []
     images: List[bytes] = []
+    video_media_id: Optional[str] = None
 
     if isinstance(content, str):
         prompt_parts.append(content)
@@ -390,6 +392,9 @@ async def _extract_prompt_and_images_from_openai_messages(
                     prompt_parts.append(text)
             elif item_type == "image_url":
                 image_url = item.get("image_url", {}).get("url", "")
+                if image_url.startswith("extend://"):
+                    video_media_id = image_url[len("extend://"):].strip() or None
+                    continue
                 images.append(
                     await _load_image_bytes_from_uri(
                         image_url,
@@ -399,7 +404,7 @@ async def _extract_prompt_and_images_from_openai_messages(
                 )
 
     prompt = "\n".join(part for part in prompt_parts if part).strip()
-    return prompt, images
+    return prompt, images, video_media_id
 
 
 async def _append_openai_reference_images(
@@ -524,7 +529,7 @@ async def _normalize_openai_request(
     allowed_token_ids: Optional[Set[int]] = None,
 ) -> NormalizedGenerationRequest:
     if request.messages:
-        prompt, images = await _extract_prompt_and_images_from_openai_messages(
+        prompt, images, video_media_id = await _extract_prompt_and_images_from_openai_messages(
             request.messages,
             api_key_id=api_key_id,
             allowed_token_ids=allowed_token_ids,
@@ -550,6 +555,7 @@ async def _normalize_openai_request(
             prompt=prompt,
             images=images,
             messages=request.messages,
+            video_media_id=video_media_id,
             project_id=_strip_optional_project_id(request.project_id),
         )
 
@@ -627,6 +633,7 @@ async def _collect_non_stream_result(
         allowed_token_ids=allowed_token_ids,
         api_key_id=api_key_id,
         requested_project_id=normalized.project_id,
+        video_media_id=normalized.video_media_id,
     ):
         result = chunk
 
@@ -1068,6 +1075,7 @@ async def _iterate_openai_stream(
         allowed_token_ids=allowed_token_ids,
         api_key_id=api_key_id,
         requested_project_id=normalized.project_id,
+        video_media_id=normalized.video_media_id,
     ):
         if chunk.startswith("data: "):
             yield _inject_projectid_into_openai_sse_chunk(chunk, project_id)
@@ -1098,6 +1106,7 @@ async def _iterate_gemini_stream(
         allowed_token_ids=allowed_token_ids,
         api_key_id=api_key_id,
         requested_project_id=normalized.project_id,
+        video_media_id=normalized.video_media_id,
     ):
         if chunk.startswith("data: "):
             payload_text = chunk[6:].strip()

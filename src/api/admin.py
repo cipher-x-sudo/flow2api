@@ -375,13 +375,23 @@ async def _solve_recaptcha_with_api_service(
     create_url = f"{base_url.rstrip('/')}/createTask"
     get_url = f"{base_url.rstrip('/')}/getTaskResult"
 
+    proxies = None
+    try:
+        if proxy_manager:
+            proxy_cfg = await proxy_manager.get_proxy_config()
+            if proxy_cfg and proxy_cfg.enabled and proxy_cfg.proxy_url:
+                proxies = _build_proxy_map(proxy_cfg.proxy_url)
+    except Exception:
+        pass
+
     # Do not use curl_cffi impersonation for captcha API JSON endpoints: some ASGI servers
     # (for example FastAPI/Uvicorn) may receive an empty body and return 422.
     async with AsyncSession() as session:
         create_resp = await session.post(
             create_url,
             json={"clientKey": client_key, "task": task},
-            timeout=30
+            timeout=30,
+            proxies=proxies,
         )
         create_json = create_resp.json()
         task_id = create_json.get("taskId")
@@ -394,7 +404,8 @@ async def _solve_recaptcha_with_api_service(
             poll_resp = await session.post(
                 get_url,
                 json={"clientKey": client_key, "taskId": task_id},
-                timeout=30
+                timeout=30,
+                proxies=proxies,
             )
             poll_json = poll_resp.json()
             if poll_json.get("status") == "ready":
