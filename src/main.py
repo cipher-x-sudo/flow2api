@@ -3,7 +3,7 @@ import os
 from datetime import datetime, timezone
 
 from fastapi import FastAPI
-from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
+from fastapi.responses import HTMLResponse, FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -13,6 +13,7 @@ from pathlib import Path
 
 from .core.config import config
 from .core.database import Database
+from .core.monitoring import CONTENT_TYPE_LATEST, render_main_metrics
 from .services.flow_client import FlowClient
 from .services.proxy_manager import ProxyManager
 from .services.token_manager import TokenManager
@@ -65,9 +66,9 @@ def _path_allowed_on_api_only_host(path: str) -> bool:
     - OpenAI / Chat Completions style: /v1/chat/completions, /v1/models, /v1/models/aliases, /v1/projects, …
     - Gemini (Google) style: /v1beta/models/…:generateContent, :streamGenerateContent, list models, …
     - Same body on alternate paths: /models, /models/{m}:generateContent, …
-    - Cached media (authenticated): /api/cache/file, /api/cache/file/{project_id}, /api/cache/blob/..., discovery, liveness: /openapi.json, /health
+    - Cached media (authenticated): /api/cache/file, /api/cache/file/{project_id}, /api/cache/blob/..., discovery, liveness: /openapi.json, /health, /metrics
     """
-    if path in ("/openapi.json", "/health"):
+    if path in ("/openapi.json", "/health", "/metrics"):
         return True
     if path.startswith(("/v1/", "/v1beta/")) or path in ("/v1", "/v1beta"):
         return True
@@ -336,6 +337,13 @@ app.add_middleware(
 # Include routers
 app.include_router(routes.router)
 app.include_router(admin.router)
+
+
+@app.get("/metrics")
+async def metrics():
+    """Prometheus metrics endpoint for the main Flow2API service."""
+    payload = await render_main_metrics(db, concurrency_manager=concurrency_manager)
+    return Response(content=payload, media_type=CONTENT_TYPE_LATEST)
 
 # HTML routes for frontend
 static_path = Path(__file__).parent.parent / "static"

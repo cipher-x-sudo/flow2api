@@ -9,6 +9,7 @@ from urllib.parse import quote
 from typing import Optional, AsyncGenerator, List, Dict, Any
 from ..core.logger import debug_logger
 from ..core.config import config
+from ..core.monitoring import record_generation_result
 from ..core.models import Task, RequestLog
 from ..core.account_tiers import (
     PAYGATE_TIER_NOT_PAID,
@@ -855,6 +856,7 @@ class GenerationHandler:
         if model not in MODEL_CONFIG:
             error_msg = f"不支持的模型: {model}"
             debug_logger.log_error(error_msg)
+            record_generation_result("unknown", "invalid", time.time() - start_time)
             yield self._create_error_response(error_msg, status_code=400)
             return
 
@@ -924,6 +926,7 @@ class GenerationHandler:
             if not error_msg:
                 error_msg = self._get_no_token_error_message(generation_type)
             debug_logger.log_error(f"[GENERATION] {error_msg}")
+            record_generation_result(generation_type, "no_token", time.time() - start_time)
             await self._log_request(
                 token_id=None,
                 api_key_id=api_key_id,
@@ -969,6 +972,7 @@ class GenerationHandler:
             if not token:
                 error_msg = "Token AT无效或刷新失败"
                 debug_logger.log_error(f"[GENERATION] {error_msg}")
+                record_generation_result(generation_type, "failed", time.time() - start_time)
                 if stream:
                     yield self._create_stream_chunk(f"❌ {error_msg}\n")
                 yield self._create_error_response(error_msg, status_code=503)
@@ -981,6 +985,7 @@ class GenerationHandler:
                 required_tier = get_required_paygate_tier_for_model(model)
                 error_msg = "当前模型需要 " + get_paygate_tier_label(required_tier) + " 账号: " + model
                 debug_logger.log_error(f"[GENERATION] {error_msg}")
+                record_generation_result(generation_type, "failed", time.time() - start_time)
                 if stream:
                     yield self._create_stream_chunk(f"❌ {error_msg}\n")
                 yield self._create_error_response(error_msg, status_code=403)
@@ -1052,6 +1057,7 @@ class GenerationHandler:
                 if token:
                     await self.token_manager.record_error(token.id)
                 duration = time.time() - start_time
+                record_generation_result(generation_type, "failed", duration)
                 perf_trace["status"] = "failed"
                 perf_trace["total_ms"] = int(duration * 1000)
                 perf_trace["error"] = error_msg
@@ -1084,6 +1090,7 @@ class GenerationHandler:
 
             # 7. 记录成功日志
             duration = time.time() - start_time
+            record_generation_result(generation_type, "success", duration)
             perf_trace["status"] = "success"
             perf_trace["total_ms"] = int(duration * 1000)
             # 日志中保留更完整的 prompt，避免管理页只看到过短内容
@@ -1133,6 +1140,7 @@ class GenerationHandler:
             error_msg = "生成已取消: 客户端连接已断开"
             debug_logger.log_warning(f"[GENERATION] ⚠️ {error_msg}")
             duration = time.time() - start_time
+            record_generation_result(generation_type or "unknown", "cancelled", duration)
             perf_trace["status"] = "failed"
             perf_trace["total_ms"] = int(duration * 1000)
             perf_trace["error"] = error_msg
@@ -1159,6 +1167,7 @@ class GenerationHandler:
 
             # 先将最终失败状态落库，再返回错误响应，避免日志停在 102。
             duration = time.time() - start_time
+            record_generation_result(generation_type or "unknown", "failed", duration)
             perf_trace["status"] = "failed"
             perf_trace["total_ms"] = int(duration * 1000)
             perf_trace["error"] = error_msg
