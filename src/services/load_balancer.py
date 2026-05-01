@@ -243,6 +243,12 @@ class LoadBalancer:
             "post_check_failure_summary": [],
             "selected_token_id": None,
         }
+        if allowed_token_ids is not None:
+            debug_logger.log_info(
+                "[LOAD_BALANCER] allowlist context: "
+                f"type={diagnostics['allowlist_filter_reason_type']}, "
+                f"effective_allowed={diagnostics['effective_allowed_token_ids']}"
+            )
 
         if not active_tokens:
             debug_logger.log_info(f"[LOAD_BALANCER] ❌ 没有活跃的Token")
@@ -323,6 +329,10 @@ class LoadBalancer:
 
         if not available_tokens:
             debug_logger.log_info(f"[LOAD_BALANCER] ❌ 没有可用的Token (图片生成={for_image_generation}, 视频生成={for_video_generation})")
+            debug_logger.log_info(
+                "[LOAD_BALANCER] no-candidate diagnostics: "
+                f"filtered_summary={diagnostics['filtered_reason_summary']}"
+            )
             self._store_selection_diagnostics(diagnostics, diagnostics_sink)
             return None
 
@@ -403,6 +413,11 @@ class LoadBalancer:
         debug_logger.log_info(f"[LOAD_BALANCER] ❌ 候选Token均不可用 (图片生成={for_image_generation}, 视频生成={for_video_generation})")
         diagnostics["post_check_failures"] = {str(tid): reason for tid, reason in post_check_failures.items()}
         diagnostics["post_check_failure_summary"] = self._summarize_reasons(post_check_failures)
+        debug_logger.log_info(
+            "[LOAD_BALANCER] final failure diagnostics: "
+            f"filtered_summary={diagnostics['filtered_reason_summary']}, "
+            f"post_check_summary={diagnostics['post_check_failure_summary']}"
+        )
         self._store_selection_diagnostics(diagnostics, diagnostics_sink)
         return None
 

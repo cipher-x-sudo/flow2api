@@ -927,8 +927,22 @@ class GenerationHandler:
         perf_trace["token_select_ms"] = int((time.time() - token_select_started_at) * 1000)
         if token_selection_diagnostics:
             perf_trace["token_selection_diagnostics"] = token_selection_diagnostics
+            debug_logger.log_info(
+                "[GENERATION] token selection diagnostics: "
+                f"allowlist_type={token_selection_diagnostics.get('allowlist_filter_reason_type')}, "
+                f"effective_allowed={token_selection_diagnostics.get('effective_allowed_token_ids')}, "
+                f"filtered_summary={token_selection_diagnostics.get('filtered_reason_summary')}, "
+                f"post_check_summary={token_selection_diagnostics.get('post_check_failure_summary')}"
+            )
         if isinstance(selection_context, dict) and selection_context:
             perf_trace["selection_context"] = dict(selection_context)
+            debug_logger.log_info(
+                "[GENERATION] selection context: "
+                f"project_id={selection_context.get('selected_project_id')}, "
+                f"key_allowed={selection_context.get('key_allowed_account_ids')}, "
+                f"effective_allowed={selection_context.get('effective_allowed_token_ids')}, "
+                f"type={selection_context.get('allowlist_filter_reason_type')}"
+            )
 
         if not token:
             error_msg = None
@@ -950,6 +964,12 @@ class GenerationHandler:
                         error_msg = unavailable_reason
             if not error_msg:
                 error_msg = self._get_no_token_error_message(generation_type)
+            debug_logger.log_error(
+                "[GENERATION] no-token failure summary: "
+                f"reason={error_msg}, "
+                f"filtered_summary={token_selection_diagnostics.get('filtered_reason_summary')}, "
+                f"post_check_summary={token_selection_diagnostics.get('post_check_failure_summary')}"
+            )
             debug_logger.log_error(f"[GENERATION] {error_msg}")
             record_generation_result(generation_type, "no_token", time.time() - start_time)
             await self._log_request(

@@ -876,6 +876,13 @@ async def _run_async_generation_task(
     api_key_id: Optional[int],
 ) -> None:
     handler = _ensure_generation_handler()
+    debug_logger.log_info(
+        "[ASYNC JOB] start generation task: "
+        f"task_id={task_id}, model={normalized.model}, "
+        f"project_id={normalized.project_id}, "
+        f"allowlist={sorted(int(x) for x in (allowed_token_ids or set()))}, "
+        f"selection_type={(selection_context or {}).get('allowlist_filter_reason_type') if isinstance(selection_context, dict) else None}"
+    )
     try:
         raw_result = await _collect_non_stream_result(
             normalized,
@@ -889,6 +896,10 @@ async def _run_async_generation_task(
             error_msg = _sanitize_async_error_message(
                 payload.get("error", {}).get("message", "Upstream generation error"),
                 selection_context=selection_context,
+            )
+            debug_logger.log_error(
+                "[ASYNC JOB] upstream error payload: "
+                f"task_id={task_id}, error={error_msg}, raw_error={payload.get('error')}"
             )
             await handler.db.update_task(
                 task_id,
@@ -912,6 +923,9 @@ async def _run_async_generation_task(
             upscale_status=fields["upscale_status"],
             upscale_error_message=fields["upscale_error_message"],
             completed_at=datetime.utcnow(),
+        )
+        debug_logger.log_info(
+            f"[ASYNC JOB] completed task: task_id={task_id}, status=completed, result_count={len(fields.get('delivery_urls') or [])}"
         )
     except Exception as exc:
         debug_logger.log_error(f"[ASYNC JOB] Generation failed for task {task_id}: {exc}")
@@ -1212,12 +1226,20 @@ def _build_selection_context(
     reason_type = "api_key_assignment"
     if effective_allowed and len(effective_allowed) < len(key_allowed_accounts):
         reason_type = "project_pin"
-    return {
+    context = {
         "allowlist_filter_reason_type": reason_type,
         "key_allowed_account_ids": key_allowed_accounts,
         "effective_allowed_token_ids": effective_allowed,
         "selected_project_id": (selected_project_id or "").strip() or None,
     }
+    debug_logger.log_info(
+        "[ROUTES] selection context built: "
+        f"type={context['allowlist_filter_reason_type']}, "
+        f"project_id={context['selected_project_id']}, "
+        f"key_allowed={context['key_allowed_account_ids']}, "
+        f"effective_allowed={context['effective_allowed_token_ids']}"
+    )
+    return context
 
 
 async def _resolve_project_pin(
