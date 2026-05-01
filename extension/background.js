@@ -37,6 +37,27 @@ function inferConnectionMode(stored) {
     return "endUser";
 }
 
+/** Public hosts should use wss://; keep ws:// for localhost-style hosts. */
+function normalizeWebSocketUrl(raw) {
+    const trimmed = String(raw || "").trim();
+    if (!trimmed) return trimmed;
+    try {
+        const u = new URL(trimmed);
+        if (u.protocol !== "ws:") return trimmed;
+        const host = (u.hostname || "").toLowerCase();
+        const isLocal =
+            host === "localhost" ||
+            host === "127.0.0.1" ||
+            host === "[::1]" ||
+            host.endsWith(".local");
+        if (isLocal) return trimmed;
+        u.protocol = "wss:";
+        return u.toString();
+    } catch {
+        return trimmed;
+    }
+}
+
 function generateInstanceId() {
     const rand = Math.random().toString(36).slice(2, 10);
     return `ext-${Date.now().toString(36)}-${rand}`;
@@ -66,7 +87,7 @@ function getSettings() {
         chrome.storage.local.get(DEFAULT_SETTINGS, (stored) => {
             const connectionMode = inferConnectionMode(stored);
             resolve({
-                serverUrl: (stored.serverUrl || DEFAULT_SETTINGS.serverUrl).trim(),
+                serverUrl: normalizeWebSocketUrl((stored.serverUrl || DEFAULT_SETTINGS.serverUrl).trim()),
                 connectionMode,
                 apiKey: (stored.apiKey || "").trim(),
                 workerAuthKey: (stored.workerAuthKey || "").trim(),

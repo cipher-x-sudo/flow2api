@@ -22,7 +22,7 @@ let reconnectInProgress = false;
 function normalizeSettings(values) {
   const mode = (values.connectionMode || "").trim() === "worker" ? "worker" : "endUser";
   return {
-    serverUrl: (values.serverUrl || DEFAULT_SETTINGS.serverUrl).trim(),
+    serverUrl: normalizeWebSocketUrl((values.serverUrl || DEFAULT_SETTINGS.serverUrl).trim()),
     connectionMode: mode,
     apiKey: (values.apiKey || "").trim(),
     workerAuthKey: (values.workerAuthKey || "").trim(),
@@ -57,6 +57,27 @@ function isValidWsUrl(value) {
   }
 }
 
+/** Use wss:// on the public internet; keep ws:// for localhost / LAN-style hosts. */
+function normalizeWebSocketUrl(raw) {
+  const trimmed = (raw || "").trim();
+  if (!trimmed) return trimmed;
+  try {
+    const u = new URL(trimmed);
+    if (u.protocol !== "ws:") return trimmed;
+    const host = (u.hostname || "").toLowerCase();
+    const isLocal =
+      host === "localhost" ||
+      host === "127.0.0.1" ||
+      host === "[::1]" ||
+      host.endsWith(".local");
+    if (isLocal) return trimmed;
+    u.protocol = "wss:";
+    return u.toString();
+  } catch {
+    return trimmed;
+  }
+}
+
 function getActiveMode() {
   const endTab = $("tabEndUser");
   return endTab && endTab.getAttribute("aria-selected") === "true" ? "endUser" : "worker";
@@ -73,19 +94,34 @@ function setActiveMode(mode) {
 function loadSettings() {
   chrome.storage.local.get(STORAGE_KEYS, (stored) => {
     const inferred = inferConnectionMode(stored);
-    const settings = normalizeSettings({ ...stored, connectionMode: inferred });
-    $("serverUrl").value = settings.serverUrl;
-    $("apiKey").value = settings.apiKey;
-    $("workerAuthKey").value = settings.workerAuthKey;
-    $("routeKey").value = settings.routeKey;
-    $("clientLabel").value = settings.clientLabel;
-    setActiveMode(settings.connectionMode);
+    const rawUrl = (stored.serverUrl || DEFAULT_SETTINGS.serverUrl).trim();
+    const fixedUrl = normalizeWebSocketUrl(rawUrl);
+    if (fixedUrl && fixedUrl !== rawUrl) {
+      chrome.storage.local.set({ serverUrl: fixedUrl }, () => {
+        chrome.storage.local.get(STORAGE_KEYS, (s2) => {
+          applyLoadedSettings(s2, inferConnectionMode(s2));
+        });
+      });
+      return;
+    }
+    applyLoadedSettings(stored, inferred);
   });
+}
+
+function applyLoadedSettings(stored, inferredMode) {
+  const settings = normalizeSettings({ ...stored, connectionMode: inferredMode });
+  $("serverUrl").value = settings.serverUrl;
+  $("apiKey").value = settings.apiKey;
+  $("workerAuthKey").value = settings.workerAuthKey;
+  $("routeKey").value = settings.routeKey;
+  $("clientLabel").value = settings.clientLabel;
+  setActiveMode(settings.connectionMode);
 }
 
 function saveSettings() {
   const mode = getActiveMode();
-  const serverUrl = ($("serverUrl").value || "").trim();
+  let serverUrl = normalizeWebSocketUrl(($("serverUrl").value || "").trim());
+  $("serverUrl").value = serverUrl;
 
   if (!isValidWsUrl(serverUrl)) {
     setStatus("WebSocket URL must start with ws:// or wss://.", true);
