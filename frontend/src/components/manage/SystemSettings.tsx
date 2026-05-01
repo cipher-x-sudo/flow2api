@@ -974,12 +974,71 @@ export function SystemSettings({ active }: { active: boolean }) {
               />
             </div>
           )}
-          <div className="space-y-2 border rounded-md p-3 border-dashed">
-            <p className="text-sm font-medium">Session refresh (ST warmup)</p>
-            <p className="text-xs text-muted-foreground">
-              Configures local headed Playwright warmup used when refreshing the session token before AT refresh. Applies
-              regardless of which captcha <em>method</em> you use for reCAPTCHA (extension, APIs, etc.).
-            </p>
+          {m === "personal" && (
+            <div className="space-y-2 border rounded-md p-3">
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <Label>Project pool size</Label>
+                  <Input
+                    type="number"
+                    value={captcha.personal_project_pool_size}
+                    onChange={(e) => setCaptcha((c) => ({ ...c, personal_project_pool_size: parseInt(e.target.value, 10) || 4 }))}
+                  />
+                </div>
+                <div>
+                  <Label>Max tabs</Label>
+                  <Input
+                    type="number"
+                    value={captcha.personal_max_resident_tabs}
+                    onChange={(e) => setCaptcha((c) => ({ ...c, personal_max_resident_tabs: parseInt(e.target.value, 10) || 5 }))}
+                  />
+                </div>
+              </div>
+              <Label>Idle TTL (s)</Label>
+              <Input
+                type="number"
+                value={captcha.personal_idle_tab_ttl_seconds}
+                onChange={(e) => setCaptcha((c) => ({ ...c, personal_idle_tab_ttl_seconds: parseInt(e.target.value, 10) || 600 }))}
+              />
+              <div className="flex items-center gap-2">
+                <Switch
+                  checked={captcha.personal_proxy_enabled}
+                  onCheckedChange={(v) => setCaptcha((c) => ({ ...c, personal_proxy_enabled: v }))}
+                />
+                <Label>Proxy</Label>
+              </div>
+              {captcha.personal_proxy_enabled ? (
+                <Input value={captcha.personal_proxy_url} onChange={(e) => setCaptcha((c) => ({ ...c, personal_proxy_url: e.target.value }))} />
+              ) : null}
+            </div>
+          )}
+          {m === "remote_browser" && (
+            <div className="space-y-2 border rounded-md p-3">
+              <Label>Remote base URL</Label>
+              <Input value={captcha.remote_browser_base_url} onChange={(e) => setCaptcha((c) => ({ ...c, remote_browser_base_url: e.target.value }))} />
+              <Label>API key</Label>
+              <Input value={captcha.remote_browser_api_key} onChange={(e) => setCaptcha((c) => ({ ...c, remote_browser_api_key: e.target.value }))} />
+              <Label>Timeout (s)</Label>
+              <Input
+                type="number"
+                value={captcha.remote_browser_timeout}
+                onChange={(e) => setCaptcha((c) => ({ ...c, remote_browser_timeout: parseInt(e.target.value, 10) || 60 }))}
+              />
+            </div>
+          )}
+          <Button onClick={saveCaptcha} disabled={busy}>
+            Save captcha settings
+          </Button>
+        </CardContent>
+      </Card>
+
+      {m === "browser" || m === "remote_browser" || m === "extension" ? (
+        <Card className="lg:col-span-2">
+          <CardHeader>
+            <CardTitle>Session refresh (ST warmup)</CardTitle>
+            <CardDescription>Local headed Playwright warmup before AT refresh.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-2">
             <div className="flex items-center gap-2">
               <Switch
                 checked={captcha.session_refresh_enabled}
@@ -1107,64 +1166,9 @@ export function SystemSettings({ active }: { active: boolean }) {
                 </div>
               </div>
             ) : null}
-          </div>
-          {m === "personal" && (
-            <div className="space-y-2 border rounded-md p-3">
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <Label>Project pool size</Label>
-                  <Input
-                    type="number"
-                    value={captcha.personal_project_pool_size}
-                    onChange={(e) => setCaptcha((c) => ({ ...c, personal_project_pool_size: parseInt(e.target.value, 10) || 4 }))}
-                  />
-                </div>
-                <div>
-                  <Label>Max tabs</Label>
-                  <Input
-                    type="number"
-                    value={captcha.personal_max_resident_tabs}
-                    onChange={(e) => setCaptcha((c) => ({ ...c, personal_max_resident_tabs: parseInt(e.target.value, 10) || 5 }))}
-                  />
-                </div>
-              </div>
-              <Label>Idle TTL (s)</Label>
-              <Input
-                type="number"
-                value={captcha.personal_idle_tab_ttl_seconds}
-                onChange={(e) => setCaptcha((c) => ({ ...c, personal_idle_tab_ttl_seconds: parseInt(e.target.value, 10) || 600 }))}
-              />
-              <div className="flex items-center gap-2">
-                <Switch
-                  checked={captcha.personal_proxy_enabled}
-                  onCheckedChange={(v) => setCaptcha((c) => ({ ...c, personal_proxy_enabled: v }))}
-                />
-                <Label>Proxy</Label>
-              </div>
-              {captcha.personal_proxy_enabled ? (
-                <Input value={captcha.personal_proxy_url} onChange={(e) => setCaptcha((c) => ({ ...c, personal_proxy_url: e.target.value }))} />
-              ) : null}
-            </div>
-          )}
-          {m === "remote_browser" && (
-            <div className="space-y-2 border rounded-md p-3">
-              <Label>Remote base URL</Label>
-              <Input value={captcha.remote_browser_base_url} onChange={(e) => setCaptcha((c) => ({ ...c, remote_browser_base_url: e.target.value }))} />
-              <Label>API key</Label>
-              <Input value={captcha.remote_browser_api_key} onChange={(e) => setCaptcha((c) => ({ ...c, remote_browser_api_key: e.target.value }))} />
-              <Label>Timeout (s)</Label>
-              <Input
-                type="number"
-                value={captcha.remote_browser_timeout}
-                onChange={(e) => setCaptcha((c) => ({ ...c, remote_browser_timeout: parseInt(e.target.value, 10) || 60 }))}
-              />
-            </div>
-          )}
-          <Button onClick={saveCaptcha} disabled={busy}>
-            Save captcha settings
-          </Button>
-        </CardContent>
-      </Card>
+          </CardContent>
+        </Card>
+      ) : null}
 
       {m === "extension" ? (
         <Card className="lg:col-span-2">
