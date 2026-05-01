@@ -1033,13 +1033,39 @@ async def refresh_at(
     try:
         # 调用token_manager的内部刷新方法（包含 ST 自动刷新逻辑）
         success = await token_manager._refresh_at(token_id)
+        st_refresh_reason = token_manager.consume_st_refresh_reason(token_id)
+        captcha_mode = str(config.captcha_method or "").strip()
+        supports_st_refresh = captcha_mode in {"personal", "browser"} or bool(
+            getattr(config, "dedicated_extension_enabled", False)
+        )
+
+        st_reason_hints = {
+            "not_attempted": "ST refresh was not attempted",
+            "policy_skipped": "ST refresh skipped by policy",
+            "disabled": "ST auto refresh is disabled",
+            "extension_disabled": "extension ST refresh feature is disabled",
+            "project_id_missing": "token has no project_id for ST refresh",
+            "extension_no_worker_or_empty": "extension worker not connected or session unavailable",
+            "extension_timeout": "extension refresh timed out",
+            "extension_error": "extension refresh encountered an internal error",
+            "local_timeout": "local browser ST refresh timed out",
+            "local_error": "local browser ST refresh failed",
+            "local_timeout_after_extension": "local browser refresh timed out after extension attempt",
+            "local_error_after_extension": "local browser refresh failed after extension attempt",
+            "extension_and_local_failed": "both extension and local browser ST refresh failed",
+            "extension_enabled_but_no_success": "extension refresh enabled but did not return a usable session",
+            "same_st": "session token did not rotate (possibly expired login)",
+            "st_refresh_exception": "unexpected ST refresh exception",
+            "failed_without_reason": "ST refresh failed without detailed reason",
+            "token_not_found": "token not found during refresh",
+        }
 
         if success:
             # 获取更新后的token信息
             updated_token = await token_manager.get_token(token_id)
             
             message = "AT刷新成功"
-            if config.captcha_method == "personal":
+            if supports_st_refresh:
                 message += "（支持ST自动刷新）"
             
             debug_logger.log_info(f"[API] AT 刷新成功: token_id={token_id}")
@@ -1057,15 +1083,18 @@ async def refresh_at(
             debug_logger.log_error(f"[API] AT 刷新失败: token_id={token_id}")
             
             error_detail = "AT刷新失败"
-            if config.captcha_method in {"personal", "browser"}:
+            if supports_st_refresh:
                 error_detail += (
-                    f"（当前打码模式: {config.captcha_method}，已尝试 ST 自动刷新后重试 AT）"
+                    f"（当前打码模式: {captcha_mode or '-'}，已尝试 ST 自动刷新后重试 AT）"
                 )
+                reason_hint = st_reason_hints.get(st_refresh_reason, st_refresh_reason or "")
+                if reason_hint:
+                    error_detail += f"；原因: {reason_hint}"
             else:
                 error_detail += (
-                    f"（当前打码模式: {config.captcha_method}，当前模式不支持 ST 自动刷新）"
+                    f"（当前打码模式: {captcha_mode or '-'}，当前模式未启用 ST 自动刷新能力）"
                 )
-            if config.captcha_method == "browser":
+            if captcha_mode == "browser":
                 error_detail += (
                     f"，gateway fallback={'on' if bool(config.browser_fallback_to_remote_browser) else 'off'}"
                 )

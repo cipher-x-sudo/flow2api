@@ -2,6 +2,7 @@ let ws = null;
 let reconnectTimeout = null;
 let heartbeatInterval = null;
 let cachedInstanceId = null;
+let sessionRefreshTimeout = null;
 
 const DEFAULT_SETTINGS = {
     serverUrl: "ws://127.0.0.1:8000/captcha_ws",
@@ -24,8 +25,21 @@ const runtimeState = {
     lastRegisterStatus: "never",
     lastRegisterError: "",
     lastError: "",
+    sessionRefreshInFlight: false,
+    sessionRefreshLastSuccessAt: 0,
+    sessionRefreshLastFailureAt: 0,
+    sessionRefreshLastReason: "",
+    sessionRefreshLastError: "",
+    sessionRefreshConsecutiveFailures: 0,
+    sessionRefreshNextAt: 0,
     events: []
 };
+
+const WORKER_REFRESH_SUCCESS_INTERVAL_MS = 8 * 60 * 1000;
+const WORKER_REFRESH_MISSING_COOKIE_INTERVAL_MS = 15 * 60 * 1000;
+const WORKER_REFRESH_RETRY_BASE_MS = 45 * 1000;
+const WORKER_REFRESH_RETRY_MAX_MS = 5 * 60 * 1000;
+const WORKER_REFRESH_RECOVERY_DELAY_MS = 8 * 1000;
 
 function inferConnectionMode(stored) {
     const explicit = String(stored.connectionMode || "").trim();
@@ -119,6 +133,7 @@ function closeSocket() {
     heartbeatInterval = null;
     if (reconnectTimeout) clearTimeout(reconnectTimeout);
     reconnectTimeout = null;
+    stopWorkerSessionRefreshScheduler();
     if (ws) {
         try {
             ws.close();
@@ -126,6 +141,99 @@ function closeSocket() {
             console.log("[Flow2API] Close socket error", e);
         }
         ws = null;
+    }
+}
+
+function stopWorkerSessionRefreshScheduler() {
+    if (sessionRefreshTimeout) clearTimeout(sessionRefreshTimeout);
+    sessionRefreshTimeout = null;
+    runtimeState.sessionRefreshNextAt = 0;
+    runtimeState.sessionRefreshInFlight = false;
+}
+
+function isWorkerModeConnected() {
+    return Boolean(
+        ws &&
+        ws.readyState === WebSocket.OPEN &&
+        runtimeState.connectionMode === "worker" &&
+        runtimeState.lastRegisterStatus === "ok"
+    );
+}
+
+function computeWorkerRefreshBackoffMs(errorCode, failures) {
+    if (errorCode === "session_cookie_missing") {
+        return WORKER_REFRESH_MISSING_COOKIE_INTERVAL_MS;
+    }
+    const exponent = Math.max(0, Number(failures || 1) - 1);
+    const next = WORKER_REFRESH_RETRY_BASE_MS * Math.pow(2, exponent);
+    return Math.min(WORKER_REFRESH_RETRY_MAX_MS, next);
+}
+
+function scheduleWorkerSessionRefresh(delayMs, reason = "proactive") {
+    if (sessionRefreshTimeout) clearTimeout(sessionRefreshTimeout);
+    if (runtimeState.connectionMode !== "worker") {
+        runtimeState.sessionRefreshNextAt = 0;
+        return;
+    }
+    const safeDelay = Math.max(1000, Number(delayMs || WORKER_REFRESH_SUCCESS_INTERVAL_MS));
+    runtimeState.sessionRefreshNextAt = Date.now() + safeDelay;
+    sessionRefreshTimeout = setTimeout(() => {
+        sessionRefreshTimeout = null;
+        performSessionRefresh({ reason }).catch((err) => {
+            console.log("[Flow2API] proactive session refresh execution failed:", err);
+        });
+    }, safeDelay);
+}
+
+async function performSessionRefresh({ reason = "server_request", reqId = null } = {}) {
+    const refreshReason = String(reason || "server_request");
+    if (runtimeState.connectionMode !== "worker") {
+        return { success: false, error: "worker_mode_required", reason: refreshReason };
+    }
+    if (runtimeState.sessionRefreshInFlight) {
+        return { success: false, error: "session_refresh_busy", reason: refreshReason };
+    }
+    runtimeState.sessionRefreshInFlight = true;
+    runtimeState.sessionRefreshLastReason = refreshReason;
+    try {
+        const result = await getSessionTokenFromCookie();
+        if (result.success) {
+            runtimeState.sessionRefreshLastSuccessAt = Date.now();
+            runtimeState.sessionRefreshLastError = "";
+            runtimeState.sessionRefreshConsecutiveFailures = 0;
+            pushEvent("session_refresh_ok", `Session refresh succeeded (${refreshReason})`);
+            if (reqId && ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({
+                    req_id: reqId,
+                    status: "success",
+                    session_token: result.sessionToken
+                }));
+            }
+            if (refreshReason !== "server_request" && isWorkerModeConnected()) {
+                scheduleWorkerSessionRefresh(WORKER_REFRESH_SUCCESS_INTERVAL_MS, "proactive");
+            }
+            return { success: true, sessionToken: result.sessionToken, reason: refreshReason };
+        }
+
+        const errorCode = result.error || "session_refresh_failed";
+        runtimeState.sessionRefreshLastFailureAt = Date.now();
+        runtimeState.sessionRefreshLastError = errorCode;
+        runtimeState.sessionRefreshConsecutiveFailures += 1;
+        pushEvent("session_refresh_error", `Session refresh failed (${refreshReason}): ${errorCode}`, "warn");
+        if (reqId && ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({
+                req_id: reqId,
+                status: "error",
+                error: errorCode
+            }));
+        }
+        if (refreshReason !== "server_request" && isWorkerModeConnected()) {
+            const retryMs = computeWorkerRefreshBackoffMs(errorCode, runtimeState.sessionRefreshConsecutiveFailures);
+            scheduleWorkerSessionRefresh(retryMs, "proactive");
+        }
+        return { success: false, error: errorCode, reason: refreshReason };
+    } finally {
+        runtimeState.sessionRefreshInFlight = false;
     }
 }
 
@@ -141,6 +249,13 @@ function resetRuntimeStatePartial() {
     runtimeState.lastRegisterStatus = "never";
     runtimeState.lastRegisterError = "";
     runtimeState.lastError = "";
+    runtimeState.sessionRefreshInFlight = false;
+    runtimeState.sessionRefreshLastSuccessAt = 0;
+    runtimeState.sessionRefreshLastFailureAt = 0;
+    runtimeState.sessionRefreshLastReason = "";
+    runtimeState.sessionRefreshLastError = "";
+    runtimeState.sessionRefreshConsecutiveFailures = 0;
+    runtimeState.sessionRefreshNextAt = 0;
     runtimeState.events = [];
 }
 
@@ -214,6 +329,7 @@ async function connectWS() {
     const settings = await getSettings();
     const instanceId = await getInstanceId();
     const mode = settings.connectionMode === "worker" ? "worker" : "endUser";
+    stopWorkerSessionRefreshScheduler();
     runtimeState.connectionMode = mode;
     runtimeState.routeKey = mode === "endUser" ? settings.routeKey : "";
     runtimeState.instanceId = instanceId;
@@ -291,6 +407,7 @@ async function connectWS() {
                 runtimeState.lastError = ackError || "register_failed";
                 pushEvent("register_ack", `Register failed: ${ackError || "unknown"}`, "error");
                 console.log("[Flow2API] Register ack error:", ackError || "unknown");
+                stopWorkerSessionRefreshScheduler();
             } else {
                 runtimeState.wsStatus = "open";
                 runtimeState.lastError = "";
@@ -303,6 +420,11 @@ async function connectWS() {
                     "binding_source=",
                     runtimeState.bindingSource || "-"
                 );
+                if (runtimeState.connectionMode === "worker") {
+                    scheduleWorkerSessionRefresh(WORKER_REFRESH_RECOVERY_DELAY_MS, "reconnect_recovery");
+                } else {
+                    stopWorkerSessionRefreshScheduler();
+                }
             }
             return;
         }
@@ -324,6 +446,7 @@ async function connectWS() {
         if (socket !== ws) return;
         console.log("[Flow2API] WebSocket Closed. Reconnecting in 2s...");
         runtimeState.wsStatus = "closed";
+        stopWorkerSessionRefreshScheduler();
         pushEvent("connect_close", "WebSocket closed, reconnect scheduled", "warn");
         ws = null;
         if (heartbeatInterval) clearInterval(heartbeatInterval);
@@ -461,21 +584,7 @@ async function getSessionTokenFromCookie() {
 }
 
 async function handleRefreshSessionToken(data) {
-    const result = await getSessionTokenFromCookie();
-    if (!ws || ws.readyState !== WebSocket.OPEN) return;
-    if (result.success) {
-        ws.send(JSON.stringify({
-            req_id: data.req_id,
-            status: "success",
-            session_token: result.sessionToken
-        }));
-    } else {
-        ws.send(JSON.stringify({
-            req_id: data.req_id,
-            status: "error",
-            error: result.error || "session_refresh_failed"
-        }));
-    }
+    await performSessionRefresh({ reason: "server_request", reqId: data && data.req_id ? data.req_id : null });
 }
 
 chrome.storage.onChanged.addListener((changes, areaName) => {

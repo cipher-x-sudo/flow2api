@@ -22,6 +22,14 @@ class TokenManager:
         self._refresh_locks: dict[int, asyncio.Lock] = {}
         self._project_locks: dict[int, asyncio.Lock] = {}
         self._refresh_futures: dict[int, asyncio.Task] = {}
+        self._last_st_refresh_reason: dict[int, str] = {}
+
+    def _set_st_refresh_reason(self, token_id: int, reason: str) -> None:
+        self._last_st_refresh_reason[token_id] = str(reason or "").strip() or "unknown"
+
+    def consume_st_refresh_reason(self, token_id: int) -> str:
+        """Return and clear the latest ST refresh reason for a token."""
+        return self._last_st_refresh_reason.pop(token_id, "")
 
     async def _get_token_lock(
         self,
@@ -450,8 +458,10 @@ class TokenManager:
             token_id,
         )
         async with refresh_lock:
+            self._set_st_refresh_reason(token_id, "not_attempted")
             token = await self.db.get_token(token_id)
             if not token:
+                self._set_st_refresh_reason(token_id, "token_not_found")
                 return False
 
             effective_st = token.st
@@ -465,9 +475,15 @@ class TokenManager:
                         f"[AT_REFRESH] Token {token_id}: browser ST refresh failed, aborting AT refresh per strict policy"
                     )
                     await self.disable_token(token_id)
+                    if self._last_st_refresh_reason.get(token_id, "not_attempted") == "not_attempted":
+                        self._set_st_refresh_reason(token_id, "failed_without_reason")
                     return False
                 if new_st:
                     effective_st = new_st
+            elif config.session_refresh_enabled:
+                self._set_st_refresh_reason(token_id, "policy_skipped")
+            else:
+                self._set_st_refresh_reason(token_id, "disabled")
 
             debug_logger.log_info(f"[AT_REFRESH] Token {token_id}: starting AT refresh...")
             current_after_st = await self.db.get_token(token_id)
@@ -605,6 +621,7 @@ class TokenManager:
 
             if not token.current_project_id:
                 debug_logger.log_warning(f"[ST_REFRESH] Token {token_id} 没有 project_id，无法刷新 ST")
+                self._set_st_refresh_reason(token_id, "project_id_missing")
                 return None
 
             debug_logger.log_info(
@@ -615,6 +632,7 @@ class TokenManager:
 
             async def _persist_if_new(candidate_st: Optional[str], source_label: str) -> Optional[str]:
                 if not candidate_st:
+                    self._set_st_refresh_reason(token_id, f"{source_label}_empty")
                     record_token_refresh("st", "failure")
                     return None
                 if candidate_st == token.st:
@@ -622,16 +640,20 @@ class TokenManager:
                         f"[ST_REFRESH] Token {token_id}: 从 {source_label} 获取到的 ST 与原 ST 相同，"
                         "可能上游会话未续期或登录已失效"
                     )
+                    self._set_st_refresh_reason(token_id, "same_st")
                     record_token_refresh("st", "failure")
                     return None
                 await self.db.update_token(token_id, st=candidate_st)
                 debug_logger.log_info(
                     f"[ST_REFRESH] Token {token_id}: ST 已自动更新 (source={source_label}, mode={captcha_mode})"
                 )
+                self._set_st_refresh_reason(token_id, f"success_{source_label}")
                 record_token_refresh("st", "success")
                 return candidate_st
 
-            if bool(getattr(config, "dedicated_extension_enabled", False)):
+            dedicated_extension_enabled = bool(getattr(config, "dedicated_extension_enabled", False))
+            extension_attempted = False
+            if dedicated_extension_enabled:
                 try:
                     from .browser_captcha_extension import ExtensionCaptchaService
 
@@ -639,6 +661,7 @@ class TokenManager:
                         getattr(config, "dedicated_extension_st_refresh_timeout_seconds", 45) or 45
                     )
                     extension_service = await ExtensionCaptchaService.get_instance(self.db)
+                    extension_attempted = True
                     extension_st = await asyncio.wait_for(
                         extension_service.refresh_session_token(
                             token_id=token_id,
@@ -649,14 +672,19 @@ class TokenManager:
                     persisted_extension = await _persist_if_new(extension_st, "dedicated_extension")
                     if persisted_extension:
                         return persisted_extension
+                    self._set_st_refresh_reason(token_id, "extension_no_worker_or_empty")
                 except asyncio.TimeoutError:
                     debug_logger.log_warning(
                         f"[ST_REFRESH] Token {token_id}: dedicated extension ST refresh timeout"
                     )
+                    self._set_st_refresh_reason(token_id, "extension_timeout")
                 except Exception as ext_err:
                     debug_logger.log_warning(
                         f"[ST_REFRESH] Token {token_id}: dedicated extension ST refresh failed: {ext_err}"
                     )
+                    self._set_st_refresh_reason(token_id, "extension_error")
+            else:
+                self._set_st_refresh_reason(token_id, "extension_disabled")
 
             # 1) Always try local headed-browser refresh first.
             from .browser_captcha import BrowserCaptchaService
@@ -672,12 +700,20 @@ class TokenManager:
                 debug_logger.log_error(
                     f"[ST_REFRESH] Token {token_id}: 本地浏览器刷新 ST 超时 ({refresh_timeout_seconds:.0f}s)"
                 )
+                if extension_attempted:
+                    self._set_st_refresh_reason(token_id, "local_timeout_after_extension")
+                else:
+                    self._set_st_refresh_reason(token_id, "local_timeout")
                 record_token_refresh("st", "failure")
                 local_st = None
             except Exception as local_err:
                 debug_logger.log_warning(
                     f"[ST_REFRESH] Token {token_id}: 本地浏览器刷新 ST 失败: {local_err}"
                 )
+                if extension_attempted:
+                    self._set_st_refresh_reason(token_id, "local_error_after_extension")
+                else:
+                    self._set_st_refresh_reason(token_id, "local_error")
                 record_token_refresh("st", "failure")
                 local_st = None
 
@@ -688,11 +724,18 @@ class TokenManager:
             debug_logger.log_warning(
                 f"[ST_REFRESH] Token {token_id}: 本地有头浏览器刷新 ST 失败 (mode={captcha_mode})"
             )
+            if extension_attempted:
+                self._set_st_refresh_reason(token_id, "extension_and_local_failed")
+            elif dedicated_extension_enabled:
+                self._set_st_refresh_reason(token_id, "extension_enabled_but_no_success")
+            else:
+                self._set_st_refresh_reason(token_id, "local_failed")
             record_token_refresh("st", "failure")
             return None
 
         except Exception as e:
             debug_logger.log_error(f"[ST_REFRESH] Token {token_id}: 刷新 ST 失败 - {str(e)}")
+            self._set_st_refresh_reason(token_id, "st_refresh_exception")
             record_token_refresh("st", "failure")
             return None
 
