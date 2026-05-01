@@ -953,6 +953,13 @@ export function SystemSettings({ active }: { active: boolean }) {
               </div>
               <div className="flex items-center gap-2">
                 <Switch
+                  checked={captcha.session_refresh_enabled}
+                  onCheckedChange={(v) => setCaptcha((c) => ({ ...c, session_refresh_enabled: v }))}
+                />
+                <Label>Enable session refresh (ST warmup path)</Label>
+              </div>
+              <div className="flex items-center gap-2">
+                <Switch
                   checked={captcha.browser_proxy_enabled}
                   onCheckedChange={(v) => setCaptcha((c) => ({ ...c, browser_proxy_enabled: v }))}
                 />
@@ -1021,6 +1028,13 @@ export function SystemSettings({ active }: { active: boolean }) {
                 value={captcha.remote_browser_timeout}
                 onChange={(e) => setCaptcha((c) => ({ ...c, remote_browser_timeout: parseInt(e.target.value, 10) || 60 }))}
               />
+              <div className="flex items-center gap-2">
+                <Switch
+                  checked={captcha.session_refresh_enabled}
+                  onCheckedChange={(v) => setCaptcha((c) => ({ ...c, session_refresh_enabled: v }))}
+                />
+                <Label>Enable session refresh (ST warmup path)</Label>
+              </div>
             </div>
           )}
           <Button onClick={saveCaptcha} disabled={busy}>
@@ -1029,20 +1043,13 @@ export function SystemSettings({ active }: { active: boolean }) {
         </CardContent>
       </Card>
 
-      {m === "browser" || m === "remote_browser" ? (
+      {(m === "browser" || m === "remote_browser") && captcha.session_refresh_enabled ? (
         <Card className="lg:col-span-2">
           <CardHeader>
             <CardTitle>Session refresh (ST warmup)</CardTitle>
             <CardDescription>Local headed Playwright warmup before AT refresh.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-2">
-            <div className="flex items-center gap-2">
-              <Switch
-                checked={captcha.session_refresh_enabled}
-                onCheckedChange={(v) => setCaptcha((c) => ({ ...c, session_refresh_enabled: v }))}
-              />
-              <Label>Enable session refresh (ST warmup path)</Label>
-            </div>
             <div className="flex items-center gap-2">
               <Switch
                 checked={captcha.session_refresh_browser_first}
