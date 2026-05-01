@@ -853,16 +853,16 @@ export function SystemSettings({ active }: { active: boolean }) {
               </SelectTrigger>
               <SelectContent>
                 <SelectGroup>
+                  <SelectLabel>Extension mode</SelectLabel>
+                  <SelectItem value="extension">Extension mode (Chrome WebSocket)</SelectItem>
+                </SelectGroup>
+                <SelectSeparator />
+                <SelectGroup>
                   <SelectLabel>Third-party solving APIs</SelectLabel>
                   <SelectItem value="yescaptcha">YesCaptcha</SelectItem>
                   <SelectItem value="capmonster">CapMonster</SelectItem>
                   <SelectItem value="ezcaptcha">EzCaptcha</SelectItem>
                   <SelectItem value="capsolver">CapSolver</SelectItem>
-                </SelectGroup>
-                <SelectSeparator />
-                <SelectGroup>
-                  <SelectLabel>Chrome extension worker</SelectLabel>
-                  <SelectItem value="extension">Chrome extension (WebSocket)</SelectItem>
                 </SelectGroup>
                 <SelectSeparator />
                 <SelectGroup>
