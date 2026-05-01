@@ -133,6 +133,10 @@
     .event-item:last-child {
       border-bottom: 0;
     }
+    #sessionTokenHistoryList code {
+      word-break: break-all;
+      white-space: pre-wrap;
+    }
     .event-time {
       color: #6b7280;
       font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -264,7 +268,7 @@
       <div class="status-grid" id="statusCards"></div>
       <div class="status-meta" id="statusMeta">Last update: —</div>
       <div class="event-wrap">
-        <div class="event-head">Recent Flow session tokens (last 3, newest first — full value stored locally)</div>
+        <div class="event-head">Recent Flow session tokens (last 3, newest first)</div>
         <ul class="event-list" id="sessionTokenHistoryList">
           <li class="event-item">No captures yet (server-requested session refresh only)</li>
         </ul>

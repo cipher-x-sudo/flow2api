@@ -13,7 +13,13 @@ import { Textarea } from "../ui/textarea"
 import { toast } from "sonner"
 import { RefreshCw, Download, Upload, Plus, Loader2, RefreshCcw, Pencil, Trash2, FolderPlus, KeyRound, Copy } from "lucide-react"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select"
-import type { CreateProjectResponse, DedicatedExtensionWorkerRow, ListDedicatedWorkersResponse, CreateDedicatedWorkerResponse } from "../../types/admin"
+import type {
+  CreateProjectResponse,
+  DedicatedExtensionWorkerRow,
+  ListDedicatedWorkersResponse,
+  CreateDedicatedWorkerResponse,
+  DeleteDedicatedWorkerResponse,
+} from "../../types/admin"
 
 function formatExpiryDisplay(atExpires: string | null | undefined): ReactNode {
   if (!atExpires) return <span className="text-muted-foreground">-</span>
@@ -122,6 +128,7 @@ export function TokenManagement() {
   const [workerKeyGenerated, setWorkerKeyGenerated] = useState<string | null>(null)
   const [workerKeyList, setWorkerKeyList] = useState<DedicatedExtensionWorkerRow[]>([])
   const [workerKeyListLoading, setWorkerKeyListLoading] = useState(false)
+  const [workerKeyDeletingId, setWorkerKeyDeletingId] = useState<number | null>(null)
 
   const loadStats = useCallback(async () => {
     if (!token) return
@@ -476,6 +483,42 @@ export function TokenManagement() {
       setWorkerKeyToken(null)
       setWorkerKeyGenerated(null)
       setWorkerKeyList([])
+      setWorkerKeyDeletingId(null)
+    }
+  }
+
+  const deleteDedicatedWorkerForToken = async (workerId: number) => {
+    if (!token || !workerKeyToken) return
+    if (
+      !confirm(
+        "Delete this worker registration key? It cannot be undone. Any extension using this key must be given a new key."
+      )
+    ) {
+      return
+    }
+    setWorkerKeyDeletingId(workerId)
+    try {
+      const { ok, status, data } = await adminJson<DeleteDedicatedWorkerResponse>(
+        `/api/admin/dedicated-extension/workers/${workerId}`,
+        token,
+        { method: "DELETE" }
+      )
+      if (ok && data?.success) {
+        toast.success("Worker key deleted")
+        await loadDedicatedWorkersForToken(workerKeyToken.id)
+      } else {
+        const d = data as DeleteDedicatedWorkerResponse & { detail?: unknown }
+        const detail = d?.detail
+        const msg =
+          typeof detail === "string"
+            ? detail
+            : Array.isArray(detail) && detail[0] && typeof (detail[0] as { msg?: string }).msg === "string"
+              ? (detail[0] as { msg: string }).msg
+              : `Failed (${status})`
+        toast.error(msg)
+      }
+    } finally {
+      setWorkerKeyDeletingId(null)
     }
   }
 
@@ -930,11 +973,32 @@ export function TokenManagement() {
               ) : workerKeyList.length === 0 ? (
                 <p className="text-xs">None yet. Generate a key below.</p>
               ) : (
-                <ul className="space-y-1 text-xs font-mono">
+                <ul className="space-y-2 text-xs">
                   {workerKeyList.map((w) => (
-                    <li key={w.id}>
-                      #{w.id} {w.worker_key_prefix} {w.is_active ? "" : "(inactive)"}
-                      {w.last_seen_at ? ` · last seen ${w.last_seen_at}` : ""}
+                    <li
+                      key={w.id}
+                      className="flex flex-wrap items-center justify-between gap-2 rounded border border-border/60 bg-background px-2 py-1.5 font-mono"
+                    >
+                      <span className="min-w-0 break-all text-muted-foreground">
+                        #{w.id} {w.worker_key_prefix}
+                        {!w.is_active ? " (inactive)" : ""}
+                        {w.last_seen_at ? ` · last seen ${w.last_seen_at}` : ""}
+                      </span>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="destructive"
+                        className="h-7 shrink-0 gap-1 px-2 text-[11px]"
+                        disabled={workerKeyDeletingId !== null || workerKeyListLoading}
+                        onClick={() => void deleteDedicatedWorkerForToken(w.id)}
+                      >
+                        {workerKeyDeletingId === w.id ? (
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                        ) : (
+                          <Trash2 className="h-3 w-3" />
+                        )}
+                        Delete
+                      </Button>
                     </li>
                   ))}
                 </ul>

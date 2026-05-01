@@ -60,6 +60,13 @@ export interface ListDedicatedWorkersResponse {
   workers?: DedicatedExtensionWorkerRow[]
 }
 
+/** Response from DELETE /api/admin/dedicated-extension/workers/{worker_id} */
+export interface DeleteDedicatedWorkerResponse {
+  success?: boolean
+  worker_id?: number
+  detail?: string
+}
+
 /** Paginated list from GET /api/logs */
 export interface LogsListResponse {
   logs: LogListItem[]

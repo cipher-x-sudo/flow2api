@@ -233,13 +233,6 @@ function formatEventTime(ts) {
   return d.toLocaleTimeString();
 }
 
-function maskFlowSessionTokenForDisplay(token) {
-  const s = String(token || "");
-  if (!s) return "—";
-  if (s.length <= 24) return `${s.slice(0, 8)}…`;
-  return `${s.slice(0, 12)}…${s.slice(-10)}`;
-}
-
 function renderSessionTokenHistory(entries) {
   const listEl = $("sessionTokenHistoryList");
   if (!listEl) return;
@@ -252,11 +245,11 @@ function renderSessionTokenHistory(entries) {
     .map((row, idx) => {
       const ts = row && row.capturedAt ? Number(row.capturedAt) : 0;
       const timeStr = ts ? escapeHtml(new Date(ts).toLocaleString()) : "—";
-      const masked = escapeHtml(maskFlowSessionTokenForDisplay(row && row.sessionToken));
+      const tokenFull = escapeHtml(String((row && row.sessionToken) || ""));
       return `<li class="event-item">
         <span class="event-time">${timeStr}</span>
         <span class="event-level info">#${idx + 1}</span>
-        <span><code>${masked}</code></span>
+        <span><code>${tokenFull}</code></span>
       </li>`;
     })
     .join("");
