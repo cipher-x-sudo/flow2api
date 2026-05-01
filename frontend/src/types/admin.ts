@@ -32,6 +32,32 @@ export interface TokenRow {
   image_count?: number
   video_count?: number
   error_count?: number
+  extension_route_key?: string | null
+}
+
+/** Row from GET /api/admin/dedicated-extension/workers (joined fields may vary) */
+export interface DedicatedExtensionWorkerRow {
+  id: number
+  worker_key_prefix: string
+  label?: string | null
+  token_id?: number | null
+  route_key?: string | null
+  is_active?: boolean | number | null
+  last_seen_at?: string | null
+  last_instance_id?: string | null
+  token_email?: string | null
+}
+
+export interface CreateDedicatedWorkerResponse {
+  success?: boolean
+  worker?: DedicatedExtensionWorkerRow
+  worker_registration_key?: string
+  detail?: string
+}
+
+export interface ListDedicatedWorkersResponse {
+  success?: boolean
+  workers?: DedicatedExtensionWorkerRow[]
 }
 
 /** Paginated list from GET /api/logs */

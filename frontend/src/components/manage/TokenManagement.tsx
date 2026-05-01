@@ -6,14 +6,14 @@ import { Card, CardContent, CardHeader, CardTitle } from "../ui/card"
 import { Button } from "../ui/button"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../ui/table"
 import { Switch } from "../ui/switch"
-import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "../ui/dialog"
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../ui/dialog"
 import { Input } from "../ui/input"
 import { Label } from "../ui/label"
 import { Textarea } from "../ui/textarea"
 import { toast } from "sonner"
-import { RefreshCw, Download, Upload, Plus, Loader2, RefreshCcw, Pencil, Trash2, FolderPlus } from "lucide-react"
+import { RefreshCw, Download, Upload, Plus, Loader2, RefreshCcw, Pencil, Trash2, FolderPlus, KeyRound, Copy } from "lucide-react"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select"
-import type { CreateProjectResponse } from "../../types/admin"
+import type { CreateProjectResponse, DedicatedExtensionWorkerRow, ListDedicatedWorkersResponse, CreateDedicatedWorkerResponse } from "../../types/admin"
 
 function formatExpiryDisplay(atExpires: string | null | undefined): ReactNode {
   if (!atExpires) return <span className="text-muted-foreground">-</span>
@@ -112,6 +112,15 @@ export function TokenManagement() {
   const [newProjectTitle, setNewProjectTitle] = useState("")
   const [newProjectSetCurrent, setNewProjectSetCurrent] = useState(true)
   const [newProjectSaving, setNewProjectSaving] = useState(false)
+
+  const [workerKeyOpen, setWorkerKeyOpen] = useState(false)
+  const [workerKeyToken, setWorkerKeyToken] = useState<TokenRow | null>(null)
+  const [workerKeyLabel, setWorkerKeyLabel] = useState("")
+  const [workerKeyRouteKey, setWorkerKeyRouteKey] = useState("")
+  const [workerKeySaving, setWorkerKeySaving] = useState(false)
+  const [workerKeyGenerated, setWorkerKeyGenerated] = useState<string | null>(null)
+  const [workerKeyList, setWorkerKeyList] = useState<DedicatedExtensionWorkerRow[]>([])
+  const [workerKeyListLoading, setWorkerKeyListLoading] = useState(false)
 
   const loadStats = useCallback(async () => {
     if (!token) return
@@ -406,6 +415,83 @@ export function TokenManagement() {
     }
   }
 
+  const loadDedicatedWorkersForToken = async (tid: number) => {
+    if (!token) return
+    setWorkerKeyListLoading(true)
+    try {
+      const { ok, data } = await adminJson<ListDedicatedWorkersResponse>("/api/admin/dedicated-extension/workers", token)
+      if (!ok || !data?.workers) {
+        setWorkerKeyList([])
+        return
+      }
+      setWorkerKeyList(data.workers.filter((w) => w.token_id === tid))
+    } catch {
+      setWorkerKeyList([])
+    } finally {
+      setWorkerKeyListLoading(false)
+    }
+  }
+
+  const openWorkerKeyDialog = (t: TokenRow) => {
+    setWorkerKeyToken(t)
+    const baseLabel = (t.remark || t.email || `token-${t.id}`).trim()
+    setWorkerKeyLabel(baseLabel ? `Worker: ${baseLabel}` : `Worker: ${t.id}`)
+    setWorkerKeyRouteKey((t.extension_route_key || "").trim())
+    setWorkerKeyGenerated(null)
+    setWorkerKeyOpen(true)
+    void loadDedicatedWorkersForToken(t.id)
+  }
+
+  const closeWorkerKeyDialog = (open: boolean) => {
+    setWorkerKeyOpen(open)
+    if (!open) {
+      setWorkerKeyToken(null)
+      setWorkerKeyGenerated(null)
+      setWorkerKeyList([])
+    }
+  }
+
+  const copyWorkerRegistrationKey = async () => {
+    if (!workerKeyGenerated) return
+    try {
+      await navigator.clipboard.writeText(workerKeyGenerated)
+      toast.success("Worker registration key copied")
+    } catch {
+      toast.error("Copy failed")
+    }
+  }
+
+  const generateDedicatedWorkerKey = async () => {
+    if (!token || !workerKeyToken) return
+    setWorkerKeySaving(true)
+    setWorkerKeyGenerated(null)
+    try {
+      const body: { label: string; token_id: number; route_key?: string | null } = {
+        label: workerKeyLabel.trim() || `Worker: ${workerKeyToken.id}`,
+        token_id: workerKeyToken.id,
+      }
+      const rk = workerKeyRouteKey.trim()
+      if (rk) body.route_key = rk
+      const { ok, status, data } = await adminJson<CreateDedicatedWorkerResponse>("/api/admin/dedicated-extension/workers", token, {
+        method: "POST",
+        body: JSON.stringify(body),
+      })
+      if (ok && data?.success && data.worker_registration_key) {
+        setWorkerKeyGenerated(data.worker_registration_key)
+        toast.success("Registration key created — copy it now; it will not be shown again.")
+        await loadDedicatedWorkersForToken(workerKeyToken.id)
+      } else {
+        const msg =
+          (data as { detail?: string })?.detail ||
+          (typeof (data as { message?: string })?.message === "string" ? (data as { message?: string }).message : null) ||
+          `Failed (${status})`
+        toast.error(msg)
+      }
+    } finally {
+      setWorkerKeySaving(false)
+    }
+  }
+
   const openNewProject = () => {
     const first = tokens[0]
     setNewProjectTokenId(first ? String(first.id) : "")
@@ -583,6 +669,16 @@ export function TokenManagement() {
                           <div className="flex justify-end gap-1 flex-wrap">
                             <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => refreshAt(t.id)}>
                               Refresh AT
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-7 px-2 text-xs"
+                              onClick={() => openWorkerKeyDialog(t)}
+                              title="Create Chrome extension worker registration key for this account"
+                            >
+                              <KeyRound className="h-3 w-3 mr-1" />
+                              Worker key
                             </Button>
                             <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => openEdit(t)}>
                               <Pencil className="h-3 w-3 mr-1" />
@@ -767,6 +863,73 @@ export function TokenManagement() {
             </Button>
             <Button onClick={submitNewProject} disabled={newProjectSaving || !newProjectTokenId}>
               {newProjectSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : "Create"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={workerKeyOpen} onOpenChange={closeWorkerKeyDialog}>
+        <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Extension worker key</DialogTitle>
+            <DialogDescription>
+              For token #{workerKeyToken?.id}
+              {workerKeyToken?.email ? ` (${workerKeyToken.email})` : ""}. Paste the generated key into the Chrome extension
+              <strong className="font-medium"> Worker</strong> tab. The full secret is shown only once.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div>
+              <Label>Worker label</Label>
+              <Input className="mt-1" value={workerKeyLabel} onChange={(e) => setWorkerKeyLabel(e.target.value)} placeholder="e.g. office PC" />
+            </div>
+            <div>
+              <Label>Extension route key (optional)</Label>
+              <Input
+                className="mt-1 font-mono text-sm"
+                value={workerKeyRouteKey}
+                onChange={(e) => setWorkerKeyRouteKey(e.target.value)}
+                placeholder="Leave empty if you only use dedicated worker binding"
+              />
+            </div>
+            <div className="rounded-md border bg-muted/40 p-3 text-sm text-muted-foreground">
+              <p className="font-medium text-foreground mb-2">Workers already linked to this token</p>
+              {workerKeyListLoading ? (
+                <p className="text-xs">Loading…</p>
+              ) : workerKeyList.length === 0 ? (
+                <p className="text-xs">None yet. Generate a key below.</p>
+              ) : (
+                <ul className="space-y-1 text-xs font-mono">
+                  {workerKeyList.map((w) => (
+                    <li key={w.id}>
+                      #{w.id} {w.worker_key_prefix} {w.is_active ? "" : "(inactive)"}
+                      {w.last_seen_at ? ` · last seen ${w.last_seen_at}` : ""}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+            {workerKeyGenerated ? (
+              <div className="space-y-2">
+                <Label>Worker registration key (copy now)</Label>
+                <div className="flex gap-2">
+                  <Textarea readOnly className="font-mono text-xs min-h-[72px]" value={workerKeyGenerated} />
+                  <Button type="button" variant="outline" size="icon" className="shrink-0" onClick={() => void copyWorkerRegistrationKey()} title="Copy">
+                    <Copy className="h-4 w-4" />
+                  </Button>
+                </div>
+              </div>
+            ) : null}
+          </div>
+          <DialogFooter className="flex-col sm:flex-row gap-2">
+            <Button type="button" variant="secondary" onClick={() => workerKeyToken && void loadDedicatedWorkersForToken(workerKeyToken.id)} disabled={workerKeyListLoading}>
+              Refresh list
+            </Button>
+            <Button type="button" onClick={() => void generateDedicatedWorkerKey()} disabled={workerKeySaving || !workerKeyToken}>
+              {workerKeySaving ? <Loader2 className="h-4 w-4 animate-spin" /> : workerKeyGenerated ? "Generate another key" : "Generate registration key"}
+            </Button>
+            <Button variant="outline" onClick={() => closeWorkerKeyDialog(false)}>
+              Close
             </Button>
           </DialogFooter>
         </DialogContent>
