@@ -32,16 +32,15 @@ const runtimeState = {
     sessionRefreshLastError: "",
     sessionRefreshConsecutiveFailures: 0,
     sessionRefreshNextAt: 0,
-    events: []
+    events: [],
+    /** Newest first; persisted under FLOW_SESSION_TOKEN_HISTORY_KEY (last 3 captures). */
+    flowSessionTokenHistory: []
 };
 
-const WORKER_REFRESH_SUCCESS_INTERVAL_MS = 8 * 60 * 1000;
-const WORKER_REFRESH_MISSING_COOKIE_INTERVAL_MS = 15 * 60 * 1000;
-const WORKER_REFRESH_RETRY_BASE_MS = 45 * 1000;
-const WORKER_REFRESH_RETRY_MAX_MS = 5 * 60 * 1000;
-const WORKER_REFRESH_RECOVERY_DELAY_MS = 8 * 1000;
 const SESSION_REFRESH_WARMUP_URL = "https://labs.google/fx/tools/flow";
 const SESSION_REFRESH_WARMUP_WAIT_MS = 10000;
+const FLOW_SESSION_TOKEN_HISTORY_KEY = "flowSessionTokenHistory";
+const FLOW_SESSION_TOKEN_HISTORY_MAX = 3;
 
 function inferConnectionMode(stored) {
     const explicit = String(stored.connectionMode || "").trim();
@@ -146,45 +145,54 @@ function closeSocket() {
     }
 }
 
+function normalizeFlowSessionTokenHistory(raw) {
+    if (!Array.isArray(raw)) return [];
+    const out = [];
+    for (const entry of raw) {
+        if (!entry || typeof entry !== "object") continue;
+        const sessionToken = String(entry.sessionToken || "").trim();
+        if (!sessionToken) continue;
+        const capturedAt = Number(entry.capturedAt) || 0;
+        out.push({ capturedAt, sessionToken });
+        if (out.length >= FLOW_SESSION_TOKEN_HISTORY_MAX) break;
+    }
+    return out.slice(0, FLOW_SESSION_TOKEN_HISTORY_MAX);
+}
+
+function loadFlowSessionTokenHistoryFromStorage() {
+    return new Promise((resolve) => {
+        chrome.storage.local.get({ [FLOW_SESSION_TOKEN_HISTORY_KEY]: [] }, (stored) => {
+            const raw = stored[FLOW_SESSION_TOKEN_HISTORY_KEY];
+            runtimeState.flowSessionTokenHistory = normalizeFlowSessionTokenHistory(raw);
+            resolve();
+        });
+    });
+}
+
+function recordCapturedFlowSessionToken(sessionToken) {
+    const token = String(sessionToken || "").trim();
+    if (!token) return;
+    const prev = Array.isArray(runtimeState.flowSessionTokenHistory)
+        ? runtimeState.flowSessionTokenHistory
+        : [];
+    if (prev[0] && String(prev[0].sessionToken || "") === token) return;
+    const next = [{ capturedAt: Date.now(), sessionToken: token }, ...prev].slice(
+        0,
+        FLOW_SESSION_TOKEN_HISTORY_MAX
+    );
+    runtimeState.flowSessionTokenHistory = next;
+    chrome.storage.local.set({ [FLOW_SESSION_TOKEN_HISTORY_KEY]: next }, () => {
+        if (chrome.runtime.lastError) {
+            console.log("[Flow2API] flowSessionTokenHistory persist failed:", chrome.runtime.lastError.message);
+        }
+    });
+}
+
 function stopWorkerSessionRefreshScheduler() {
     if (sessionRefreshTimeout) clearTimeout(sessionRefreshTimeout);
     sessionRefreshTimeout = null;
     runtimeState.sessionRefreshNextAt = 0;
     runtimeState.sessionRefreshInFlight = false;
-}
-
-function isWorkerModeConnected() {
-    return Boolean(
-        ws &&
-        ws.readyState === WebSocket.OPEN &&
-        runtimeState.connectionMode === "worker" &&
-        runtimeState.lastRegisterStatus === "ok"
-    );
-}
-
-function computeWorkerRefreshBackoffMs(errorCode, failures) {
-    if (errorCode === "session_cookie_missing") {
-        return WORKER_REFRESH_MISSING_COOKIE_INTERVAL_MS;
-    }
-    const exponent = Math.max(0, Number(failures || 1) - 1);
-    const next = WORKER_REFRESH_RETRY_BASE_MS * Math.pow(2, exponent);
-    return Math.min(WORKER_REFRESH_RETRY_MAX_MS, next);
-}
-
-function scheduleWorkerSessionRefresh(delayMs, reason = "proactive") {
-    if (sessionRefreshTimeout) clearTimeout(sessionRefreshTimeout);
-    if (runtimeState.connectionMode !== "worker") {
-        runtimeState.sessionRefreshNextAt = 0;
-        return;
-    }
-    const safeDelay = Math.max(1000, Number(delayMs || WORKER_REFRESH_SUCCESS_INTERVAL_MS));
-    runtimeState.sessionRefreshNextAt = Date.now() + safeDelay;
-    sessionRefreshTimeout = setTimeout(() => {
-        sessionRefreshTimeout = null;
-        performSessionRefresh({ reason }).catch((err) => {
-            console.log("[Flow2API] proactive session refresh execution failed:", err);
-        });
-    }, safeDelay);
 }
 
 async function performSessionRefresh({ reason = "server_request", reqId = null } = {}) {
@@ -208,15 +216,13 @@ async function performSessionRefresh({ reason = "server_request", reqId = null }
             runtimeState.sessionRefreshLastError = "";
             runtimeState.sessionRefreshConsecutiveFailures = 0;
             pushEvent("session_refresh_ok", `Session refresh succeeded (${refreshReason})`);
+            recordCapturedFlowSessionToken(result.sessionToken);
             if (reqId && ws && ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify({
                     req_id: reqId,
                     status: "success",
                     session_token: result.sessionToken
                 }));
-            }
-            if (refreshReason !== "server_request" && isWorkerModeConnected()) {
-                scheduleWorkerSessionRefresh(WORKER_REFRESH_SUCCESS_INTERVAL_MS, "proactive");
             }
             return { success: true, sessionToken: result.sessionToken, reason: refreshReason };
         }
@@ -232,10 +238,6 @@ async function performSessionRefresh({ reason = "server_request", reqId = null }
                 status: "error",
                 error: errorCode
             }));
-        }
-        if (refreshReason !== "server_request" && isWorkerModeConnected()) {
-            const retryMs = computeWorkerRefreshBackoffMs(errorCode, runtimeState.sessionRefreshConsecutiveFailures);
-            scheduleWorkerSessionRefresh(retryMs, "proactive");
         }
         return { success: false, error: errorCode, reason: refreshReason };
     } finally {
@@ -263,6 +265,7 @@ function resetRuntimeStatePartial() {
     runtimeState.sessionRefreshConsecutiveFailures = 0;
     runtimeState.sessionRefreshNextAt = 0;
     runtimeState.events = [];
+    runtimeState.flowSessionTokenHistory = [];
 }
 
 /** Clear saved settings, drop stable instance id, and reconnect (used by options Reset). */
@@ -270,7 +273,7 @@ function resetExtensionToDefaults(done) {
     cachedInstanceId = null;
     resetRuntimeStatePartial();
     closeSocket();
-    chrome.storage.local.remove(["extensionInstanceId"], () => {
+    chrome.storage.local.remove(["extensionInstanceId", FLOW_SESSION_TOKEN_HISTORY_KEY], () => {
         chrome.storage.local.set(
             {
                 serverUrl: DEFAULT_SETTINGS.serverUrl,
@@ -426,11 +429,7 @@ async function connectWS() {
                     "binding_source=",
                     runtimeState.bindingSource || "-"
                 );
-                if (runtimeState.connectionMode === "worker") {
-                    scheduleWorkerSessionRefresh(WORKER_REFRESH_RECOVERY_DELAY_MS, "reconnect_recovery");
-                } else {
-                    stopWorkerSessionRefreshScheduler();
-                }
+                stopWorkerSessionRefreshScheduler();
             }
             return;
         }
@@ -668,5 +667,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     }
 });
 
-pushEvent("startup", "Background worker started");
-connectWS();
+loadFlowSessionTokenHistoryFromStorage().then(() => {
+    pushEvent("startup", "Background worker started");
+    connectWS();
+});

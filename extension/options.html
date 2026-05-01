@@ -264,6 +264,12 @@
       <div class="status-grid" id="statusCards"></div>
       <div class="status-meta" id="statusMeta">Last update: —</div>
       <div class="event-wrap">
+        <div class="event-head">Recent Flow session tokens (last 3, newest first — full value stored locally)</div>
+        <ul class="event-list" id="sessionTokenHistoryList">
+          <li class="event-item">No captures yet (server-requested session refresh only)</li>
+        </ul>
+      </div>
+      <div class="event-wrap">
         <div class="event-head">Recent events (latest 10)</div>
         <ul class="event-list" id="eventLogList">
           <li class="event-item">No recent events</li>
@@ -271,7 +277,7 @@
       </div>
       <div class="hint">
         WebSocket URL is shared. Saving as <strong>End user</strong> clears the worker key; saving as <strong>Worker</strong> clears API key, client label, and route key.
-        <strong>Reset extension</strong> clears all saved settings, generates a new instance id, and reconnects with defaults.
+        <strong>Reset extension</strong> clears all saved settings, the last-3 Flow session token history, generates a new instance id, and reconnects with defaults.
       </div>
     </div>
   </div>

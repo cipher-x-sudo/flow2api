@@ -75,3 +75,5 @@ tests/
 
 # Root GUI static build (keep local-only)
 /static/
+
+extension.zip

@@ -233,6 +233,35 @@ function formatEventTime(ts) {
   return d.toLocaleTimeString();
 }
 
+function maskFlowSessionTokenForDisplay(token) {
+  const s = String(token || "");
+  if (!s) return "—";
+  if (s.length <= 24) return `${s.slice(0, 8)}…`;
+  return `${s.slice(0, 12)}…${s.slice(-10)}`;
+}
+
+function renderSessionTokenHistory(entries) {
+  const listEl = $("sessionTokenHistoryList");
+  if (!listEl) return;
+  const list = Array.isArray(entries) ? entries : [];
+  if (!list.length) {
+    listEl.innerHTML = `<li class="event-item">No captures yet (server-requested session refresh only)</li>`;
+    return;
+  }
+  listEl.innerHTML = list
+    .map((row, idx) => {
+      const ts = row && row.capturedAt ? Number(row.capturedAt) : 0;
+      const timeStr = ts ? escapeHtml(new Date(ts).toLocaleString()) : "—";
+      const masked = escapeHtml(maskFlowSessionTokenForDisplay(row && row.sessionToken));
+      return `<li class="event-item">
+        <span class="event-time">${timeStr}</span>
+        <span class="event-level info">#${idx + 1}</span>
+        <span><code>${masked}</code></span>
+      </li>`;
+    })
+    .join("");
+}
+
 function renderEventLog(events) {
   const logEl = $("eventLogList");
   const list = Array.isArray(events) ? events.slice(-10).reverse() : [];
@@ -260,10 +289,12 @@ function updateRuntimeStatus(state) {
   if (!state) {
     $("statusCards").innerHTML = `<div class="status-card"><span class="status-label">Connection</span><span class="status-value">unknown</span></div>`;
     metaEl.textContent = "Last update: no runtime state";
+    renderSessionTokenHistory([]);
     renderEventLog([]);
     return;
   }
   renderStatusCards(state);
+  renderSessionTokenHistory(state.flowSessionTokenHistory);
   renderEventLog(state.events);
   metaEl.textContent = `Last update: ${new Date().toLocaleTimeString()} • Status: ${state.wsStatus || "unknown"}`;
 }
@@ -296,7 +327,7 @@ function reconnectNow() {
 }
 
 function runResetExtension() {
-  if (!confirm("Reset this extension?\n\nThis removes WebSocket URL, API key, worker key, labels, route key, and assigns a new instance id. The background worker reconnects with default local URL.")) {
+  if (!confirm("Reset this extension?\n\nThis removes WebSocket URL, API key, worker key, labels, route key, stored Flow session token history (last 3), and assigns a new instance id. The background worker reconnects with default local URL.")) {
     return;
   }
   setStatus("Resetting extension…", false);
