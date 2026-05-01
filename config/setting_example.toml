@@ -75,6 +75,7 @@ browser_count = 1  # browser 模式的有头浏览器实例数量
 personal_project_pool_size = 4  # personal 模式下单个 Token 默认维护的项目池数量（仅影响项目轮换，不决定打码标签页数量）
 personal_max_resident_tabs = 5  # personal 模式共享打码标签页上限，所有 Token/project 共用这组 tab
 personal_idle_tab_ttl_seconds = 600  # personal 模式标签页空闲回收时间(秒)
+extension_queue_wait_timeout_seconds = 20  # extension 模式按 managed key 排队等待 worker 的超时秒数
 # --- 第三方 API 打码（仅当 captcha_method 设为对应服务时需要填写）---
 yescaptcha_api_key = ""  # YesCaptcha API密钥
 yescaptcha_base_url = "https://api.yescaptcha.com"

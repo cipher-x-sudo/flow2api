@@ -224,6 +224,7 @@ class CaptchaConfig(BaseModel):
     session_refresh_scheduler_interval_minutes: int = 30
     session_refresh_scheduler_batch_size: int = 10
     session_refresh_scheduler_only_expiring_within_minutes: int = 60
+    extension_queue_wait_timeout_seconds: int = 20
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
@@ -234,6 +235,16 @@ class PluginConfig(BaseModel):
     id: int = 1
     connection_token: str = ""  # 插件连接token
     auto_enable_on_update: bool = True  # 更新token时自动启用（默认开启）
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+
+class ExtensionWorkerBinding(BaseModel):
+    """Route key to managed API key binding for extension workers."""
+
+    id: Optional[int] = None
+    route_key: str
+    api_key_id: int
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 

@@ -3,7 +3,7 @@ import json
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 from fastapi import WebSocket
 
@@ -15,6 +15,8 @@ class ExtensionConnection:
     websocket: WebSocket
     route_key: str = ""
     client_label: str = ""
+    managed_api_key_id: Optional[int] = None
+    binding_source: str = "none"
     connected_at: float = field(default_factory=time.time)
 
 
@@ -26,6 +28,9 @@ class ExtensionCaptchaService:
         self.db = db
         self.active_connections: list[ExtensionConnection] = []
         self.pending_requests: dict[str, tuple[asyncio.Future, WebSocket]] = {}
+        self._state_lock = asyncio.Lock()
+        self._connection_changed = asyncio.Condition()
+        self._queue_waiters: dict[str, int] = {}
 
     @classmethod
     async def get_instance(cls, db=None) -> "ExtensionCaptchaService":
@@ -37,6 +42,62 @@ class ExtensionCaptchaService:
             cls._instance.db = db
         return cls._instance
 
+    def _queue_key(self, managed_api_key_id: Optional[int]) -> str:
+        return f"key:{managed_api_key_id}" if managed_api_key_id is not None else "legacy"
+
+    async def _notify_connection_change(self) -> None:
+        async with self._connection_changed:
+            self._connection_changed.notify_all()
+
+    async def _load_persisted_binding(self, route_key: str) -> Tuple[Optional[int], str]:
+        normalized = (route_key or "").strip()
+        if not normalized or not self.db or not hasattr(self.db, "get_extension_worker_binding_for_route_key"):
+            return None, "none"
+        try:
+            binding = await self.db.get_extension_worker_binding_for_route_key(normalized)
+            if binding and binding.get("api_key_id") is not None:
+                return int(binding["api_key_id"]), "persisted"
+        except Exception as exc:
+            debug_logger.log_warning(f"[Extension Captcha] Failed to load binding for route_key={normalized}: {exc}")
+        return None, "none"
+
+    async def _resolve_claimed_managed_key(self, raw_value: Any) -> Optional[int]:
+        if raw_value in (None, "", "null"):
+            return None
+        try:
+            api_key_id = int(raw_value)
+        except (TypeError, ValueError):
+            raise ValueError("managed_api_key_id must be an integer")
+        if api_key_id <= 0:
+            raise ValueError("managed_api_key_id must be positive")
+        if not self.db or not hasattr(self.db, "get_api_key_detail"):
+            raise ValueError("Managed API key lookup is not available")
+        detail = await self.db.get_api_key_detail(api_key_id)
+        if not detail:
+            raise ValueError(f"Managed API key {api_key_id} does not exist")
+        return api_key_id
+
+    async def _apply_route_binding_to_connection(
+        self,
+        conn: ExtensionConnection,
+        *,
+        claimed_managed_api_key_id: Any = None,
+    ) -> None:
+        claimed_key: Optional[int] = None
+        claimed = False
+        if claimed_managed_api_key_id not in (None, "", "null"):
+            claimed = True
+            claimed_key = await self._resolve_claimed_managed_key(claimed_managed_api_key_id)
+            if conn.route_key and self.db and hasattr(self.db, "upsert_extension_worker_binding"):
+                await self.db.upsert_extension_worker_binding(conn.route_key, claimed_key)
+            conn.managed_api_key_id = claimed_key
+            conn.binding_source = "claimed"
+            return
+
+        persisted_key, source = await self._load_persisted_binding(conn.route_key)
+        conn.managed_api_key_id = persisted_key
+        conn.binding_source = source if source != "none" else ("claimed" if claimed else "none")
+
     async def connect(self, websocket: WebSocket):
         await websocket.accept()
         conn = ExtensionConnection(
@@ -44,11 +105,21 @@ class ExtensionCaptchaService:
             route_key=(websocket.query_params.get("route_key") or "").strip(),
             client_label=(websocket.query_params.get("client_label") or "").strip(),
         )
+        claimed_managed_key = websocket.query_params.get("managed_api_key_id")
+        try:
+            await self._apply_route_binding_to_connection(
+                conn,
+                claimed_managed_api_key_id=claimed_managed_key,
+            )
+        except Exception as exc:
+            debug_logger.log_warning(f"[Extension Captcha] Ignoring invalid managed key claim on connect: {exc}")
         self.active_connections.append(conn)
         debug_logger.log_info(
             f"[Extension Captcha] Client connected. Total: {len(self.active_connections)}, "
-            f"route_key={conn.route_key or '-'}, label={conn.client_label or '-'}"
+            f"route_key={conn.route_key or '-'}, label={conn.client_label or '-'}, "
+            f"managed_api_key_id={conn.managed_api_key_id}, source={conn.binding_source}"
         )
+        await self._notify_connection_change()
 
     def disconnect(self, websocket: WebSocket):
         for conn in list(self.active_connections):
@@ -58,6 +129,11 @@ class ExtensionCaptchaService:
                     f"[Extension Captcha] Client disconnected. Total: {len(self.active_connections)}, "
                     f"route_key={conn.route_key or '-'}, label={conn.client_label or '-'}"
                 )
+                try:
+                    loop = asyncio.get_running_loop()
+                    loop.create_task(self._notify_connection_change())
+                except Exception:
+                    pass
                 return
 
     def _find_connection(self, websocket: WebSocket) -> Optional[ExtensionConnection]:
@@ -66,10 +142,25 @@ class ExtensionCaptchaService:
                 return conn
         return None
 
-    def _select_connection(self, route_key: str) -> Optional[ExtensionConnection]:
+    def _select_connection(
+        self,
+        route_key: str,
+        managed_api_key_id: Optional[int],
+    ) -> Optional[ExtensionConnection]:
         normalized_key = (route_key or "").strip()
+        candidate_connections = self.active_connections
+        if managed_api_key_id is not None:
+            candidate_connections = [
+                conn for conn in candidate_connections if conn.managed_api_key_id == managed_api_key_id
+            ]
+        else:
+            # Legacy/global callers must never borrow managed-key scoped workers.
+            candidate_connections = [
+                conn for conn in candidate_connections if conn.managed_api_key_id is None
+            ]
+
         if normalized_key:
-            for conn in self.active_connections:
+            for conn in candidate_connections:
                 if conn.route_key == normalized_key:
                     return conn
             return None
@@ -77,7 +168,7 @@ class ExtensionCaptchaService:
         # A keyed route such as "9223" belongs to a specific browser/account
         # and must never be borrowed by another token just because it is the
         # only extension online.
-        for conn in self.active_connections:
+        for conn in candidate_connections:
             if not conn.route_key:
                 return conn
         return None
@@ -88,6 +179,8 @@ class ExtensionCaptchaService:
             label = conn.route_key or "(empty)"
             if conn.client_label:
                 label = f"{label}:{conn.client_label}"
+            if conn.managed_api_key_id is not None:
+                label = f"{label}@key{conn.managed_api_key_id}"
             labels.append(label)
         return ", ".join(labels)
 
@@ -111,12 +204,48 @@ class ExtensionCaptchaService:
             debug_logger.log_warning(f"[Extension Captcha] Failed to resolve route key for token {token_id}: {e}")
         return ""
 
-    def _has_connection_for_route_key(self, route_key: str) -> bool:
-        return self._select_connection(route_key) is not None
+    def _has_connection_for_route_key(self, route_key: str, managed_api_key_id: Optional[int]) -> bool:
+        return self._select_connection(route_key, managed_api_key_id) is not None
 
-    async def has_connection_for_token(self, token_id: Optional[int]) -> tuple[bool, str]:
+    async def has_connection_for_token(
+        self,
+        token_id: Optional[int],
+        managed_api_key_id: Optional[int] = None,
+    ) -> tuple[bool, str]:
         route_key = await self._resolve_route_key(token_id)
-        return self._has_connection_for_route_key(route_key), route_key
+        return self._has_connection_for_route_key(route_key, managed_api_key_id), route_key
+
+    async def _wait_for_connection(
+        self,
+        *,
+        route_key: str,
+        managed_api_key_id: Optional[int],
+        timeout: float,
+    ) -> Optional[ExtensionConnection]:
+        deadline = time.time() + max(0.0, float(timeout))
+        queue_key = self._queue_key(managed_api_key_id)
+        async with self._state_lock:
+            self._queue_waiters[queue_key] = self._queue_waiters.get(queue_key, 0) + 1
+        try:
+            while True:
+                conn = self._select_connection(route_key, managed_api_key_id)
+                if conn is not None:
+                    return conn
+                remaining = deadline - time.time()
+                if remaining <= 0:
+                    return None
+                async with self._connection_changed:
+                    try:
+                        await asyncio.wait_for(self._connection_changed.wait(), timeout=min(remaining, 1.5))
+                    except asyncio.TimeoutError:
+                        pass
+        finally:
+            async with self._state_lock:
+                current = self._queue_waiters.get(queue_key, 0)
+                if current <= 1:
+                    self._queue_waiters.pop(queue_key, None)
+                else:
+                    self._queue_waiters[queue_key] = current - 1
 
     async def handle_message(self, websocket: WebSocket, data: str):
         try:
@@ -128,9 +257,19 @@ class ExtensionCaptchaService:
                 if conn:
                     conn.route_key = (payload.get("route_key") or conn.route_key or "").strip()
                     conn.client_label = (payload.get("client_label") or conn.client_label or "").strip()
+                    register_error = None
+                    try:
+                        await self._apply_route_binding_to_connection(
+                            conn,
+                            claimed_managed_api_key_id=payload.get("managed_api_key_id"),
+                        )
+                    except Exception as exc:
+                        register_error = str(exc)
+                        debug_logger.log_warning(f"[Extension Captcha] Invalid managed key claim: {register_error}")
                     debug_logger.log_info(
                         f"[Extension Captcha] Client registered route_key={conn.route_key or '-'}, "
-                        f"label={conn.client_label or '-'}"
+                        f"label={conn.client_label or '-'}, "
+                        f"managed_api_key_id={conn.managed_api_key_id}, source={conn.binding_source}"
                     )
                     await self._send_ack(
                         websocket,
@@ -138,8 +277,13 @@ class ExtensionCaptchaService:
                             "type": "register_ack",
                             "route_key": conn.route_key,
                             "client_label": conn.client_label,
+                            "managed_api_key_id": conn.managed_api_key_id,
+                            "binding_source": conn.binding_source,
+                            "status": "error" if register_error else "ok",
+                            "error": register_error,
                         },
                     )
+                    await self._notify_connection_change()
                 return
 
             req_id = payload.get("req_id")
@@ -161,18 +305,30 @@ class ExtensionCaptchaService:
         action: str = "IMAGE_GENERATION",
         timeout: int = 20,
         token_id: Optional[int] = None,
+        managed_api_key_id: Optional[int] = None,
     ) -> Optional[str]:
-        if not self.active_connections:
-            debug_logger.log_warning("[Extension Captcha] No active extension connections available.")
-            raise RuntimeError("Chrome Extension not connected or Google Labs tab not open.")
-
         route_key = await self._resolve_route_key(token_id)
-        conn = self._select_connection(route_key)
+        queue_wait_timeout = 20
+        if self.db and hasattr(self.db, "get_captcha_config"):
+            try:
+                captcha_config = await self.db.get_captcha_config()
+                queue_wait_timeout = int(getattr(captcha_config, "extension_queue_wait_timeout_seconds", 20) or 20)
+            except Exception as exc:
+                debug_logger.log_warning(f"[Extension Captcha] Failed to load queue timeout: {exc}")
+        queue_wait_timeout = max(1, min(120, queue_wait_timeout))
+        conn = await self._wait_for_connection(
+            route_key=route_key,
+            managed_api_key_id=managed_api_key_id,
+            timeout=queue_wait_timeout,
+        )
         if conn is None:
             available = self._describe_routes() or "none"
+            qkey = self._queue_key(managed_api_key_id)
+            waiting_count = self._queue_waiters.get(qkey, 0)
             raise RuntimeError(
-                f"No Chrome Extension connection matches token_id={token_id} route_key='{route_key}'. "
-                f"Available route keys: {available}"
+                f"No Chrome Extension connection matches managed_api_key_id={managed_api_key_id}, "
+                f"token_id={token_id}, route_key='{route_key}' after waiting {queue_wait_timeout}s. "
+                f"Queue waiters={waiting_count}. Available route keys: {available}"
             )
 
         req_id = f"req_{uuid.uuid4().hex}"
@@ -185,12 +341,14 @@ class ExtensionCaptchaService:
             "action": action,
             "project_id": project_id,
             "route_key": route_key,
+            "managed_api_key_id": managed_api_key_id,
         }
 
         try:
             debug_logger.log_info(
                 f"[Extension Captcha] Dispatching token request via route_key={route_key or '-'}, "
-                f"label={conn.client_label or '-'}, project_id={project_id}, action={action}"
+                f"label={conn.client_label or '-'}, project_id={project_id}, action={action}, "
+                f"managed_api_key_id={managed_api_key_id}"
             )
             await conn.websocket.send_text(json.dumps(request_data))
             result = await asyncio.wait_for(future, timeout=timeout)
@@ -214,3 +372,48 @@ class ExtensionCaptchaService:
     async def report_flow_error(self, project_id: str, error_reason: str, error_message: str = ""):
         _ = project_id, error_message
         debug_logger.log_warning(f"[Extension Captcha] Flow error reported (ignoring): {error_reason}")
+
+    async def list_active_workers(self) -> list[Dict[str, Any]]:
+        workers: list[Dict[str, Any]] = []
+        for idx, conn in enumerate(self.active_connections, start=1):
+            workers.append(
+                {
+                    "connection_id": idx,
+                    "route_key": conn.route_key,
+                    "client_label": conn.client_label,
+                    "managed_api_key_id": conn.managed_api_key_id,
+                    "binding_source": conn.binding_source,
+                    "connected_at": conn.connected_at,
+                }
+            )
+        return workers
+
+    async def bind_route_key(self, route_key: str, managed_api_key_id: int) -> None:
+        normalized_route = (route_key or "").strip()
+        if not normalized_route:
+            raise ValueError("route_key is required")
+        if not self.db or not hasattr(self.db, "upsert_extension_worker_binding"):
+            raise ValueError("Binding persistence is unavailable")
+        managed_api_key_id = await self._resolve_claimed_managed_key(managed_api_key_id)
+        await self.db.upsert_extension_worker_binding(normalized_route, managed_api_key_id)
+        for conn in self.active_connections:
+            if conn.route_key == normalized_route:
+                conn.managed_api_key_id = managed_api_key_id
+                conn.binding_source = "manual"
+        await self._notify_connection_change()
+
+    async def unbind_route_key(self, route_key: str) -> None:
+        normalized_route = (route_key or "").strip()
+        if not normalized_route:
+            raise ValueError("route_key is required")
+        if not self.db or not hasattr(self.db, "delete_extension_worker_binding"):
+            raise ValueError("Binding persistence is unavailable")
+        await self.db.delete_extension_worker_binding(normalized_route)
+        for conn in self.active_connections:
+            if conn.route_key == normalized_route:
+                conn.managed_api_key_id = None
+                conn.binding_source = "none"
+        await self._notify_connection_change()
+
+    def get_queue_stats(self) -> Dict[str, int]:
+        return dict(self._queue_waiters)

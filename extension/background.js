@@ -6,8 +6,22 @@ const DEFAULT_SETTINGS = {
     serverUrl: "ws://127.0.0.1:8000/captcha_ws",
     apiKey: "",
     routeKey: "",
-    clientLabel: ""
+    clientLabel: "",
+    managedApiKeyId: ""
 };
+const runtimeState = {
+    wsStatus: "idle",
+    routeKey: "",
+    managedApiKeyId: "",
+    lastRegisterStatus: "never",
+    lastError: ""
+};
+
+function normalizeManagedApiKeyId(value) {
+    const text = String(value || "").trim();
+    if (!text) return "";
+    return /^\d+$/.test(text) ? text : "";
+}
 
 function getSettings() {
     return new Promise((resolve) => {
@@ -16,7 +30,8 @@ function getSettings() {
                 serverUrl: (stored.serverUrl || DEFAULT_SETTINGS.serverUrl).trim(),
                 apiKey: (stored.apiKey || "").trim(),
                 routeKey: (stored.routeKey || "").trim(),
-                clientLabel: (stored.clientLabel || "").trim()
+                clientLabel: (stored.clientLabel || "").trim(),
+                managedApiKeyId: normalizeManagedApiKeyId(stored.managedApiKeyId || "")
             });
         });
     });
@@ -75,6 +90,10 @@ async function connectWS() {
     if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
 
     const settings = await getSettings();
+    runtimeState.routeKey = settings.routeKey;
+    runtimeState.managedApiKeyId = settings.managedApiKeyId;
+    runtimeState.wsStatus = "connecting";
+    runtimeState.lastError = "";
     const url = new URL(settings.serverUrl || DEFAULT_SETTINGS.serverUrl);
     if (settings.apiKey) {
         url.searchParams.set("key", settings.apiKey);
@@ -85,15 +104,20 @@ async function connectWS() {
     if (settings.clientLabel) {
         url.searchParams.set("client_label", settings.clientLabel);
     }
+    if (settings.managedApiKeyId) {
+        url.searchParams.set("managed_api_key_id", settings.managedApiKeyId);
+    }
 
     ws = new WebSocket(url.toString());
 
     ws.onopen = () => {
         console.log("[Flow2API] Background connected to WebSocket", url.toString());
+        runtimeState.wsStatus = "open";
         ws.send(JSON.stringify({
             type: "register",
             route_key: settings.routeKey,
-            client_label: settings.clientLabel
+            client_label: settings.clientLabel,
+            managed_api_key_id: settings.managedApiKeyId || undefined
         }));
         if (heartbeatInterval) clearInterval(heartbeatInterval);
         heartbeatInterval = setInterval(() => {
@@ -115,6 +139,9 @@ async function connectWS() {
 
         if (data.type === "register_ack") {
             console.log("[Flow2API] Registered route key:", data.route_key || "(empty)");
+            runtimeState.lastRegisterStatus = data.status || "ok";
+            runtimeState.managedApiKeyId = String(data.managed_api_key_id || settings.managedApiKeyId || "");
+            runtimeState.lastError = data.error || "";
             return;
         }
 
@@ -127,6 +154,7 @@ async function connectWS() {
 
     ws.onclose = () => {
         console.log("[Flow2API] WebSocket Closed. Reconnecting in 2s...");
+        runtimeState.wsStatus = "closed";
         ws = null;
         if (heartbeatInterval) clearInterval(heartbeatInterval);
         if (reconnectTimeout) clearTimeout(reconnectTimeout);
@@ -135,11 +163,14 @@ async function connectWS() {
 
     ws.onerror = (e) => {
         console.log("[Flow2API] WebSocket Error", e);
+        runtimeState.wsStatus = "error";
+        runtimeState.lastError = "websocket_error";
     };
 }
 
-async function handleGetToken(data) {
+async function generateTokenInFreshTab(action) {
     let newTabId = null;
+    let lastErrorMsg = "No response from tab.";
     try {
         console.log("[Flow2API] Auto-opening fresh Google Labs tab to avoid token expiry...");
         const newTab = await chrome.tabs.create({ url: "https://labs.google/fx/tools/flow", active: false });
@@ -148,9 +179,8 @@ async function handleGetToken(data) {
         await waitForTabReady(newTabId);
         await sleep(1200);
 
-        let successResponse = null;
-        let lastErrorMsg = "No response from tab.";
-        const scriptTimeoutMs = data.action === "VIDEO_GENERATION" ? 30000 : 20000;
+        let successToken = null;
+        const scriptTimeoutMs = action === "VIDEO_GENERATION" ? 30000 : 20000;
 
         try {
             const results = await chrome.scripting.executeScript({
@@ -189,35 +219,25 @@ async function handleGetToken(data) {
                         }
                     });
                 },
-                args: [data.action || "IMAGE_GENERATION", scriptTimeoutMs]
+                args: [action || "IMAGE_GENERATION", scriptTimeoutMs]
             });
 
             if (results && results[0] && results[0].result) {
-                successResponse = { status: "success", token: results[0].result };
+                successToken = results[0].result;
             }
         } catch (e) {
             lastErrorMsg = e.message || "Script execution failed";
         }
 
-        if (successResponse) {
-            ws.send(JSON.stringify({
-                req_id: data.req_id,
-                status: successResponse.status,
-                token: successResponse.token
-            }));
-        } else {
-            ws.send(JSON.stringify({
-                req_id: data.req_id,
-                status: "error",
-                error: "Extension script failed: " + lastErrorMsg
-            }));
+        if (successToken) {
+            runtimeState.lastError = "";
+            return { success: true, token: successToken };
         }
+        runtimeState.lastError = lastErrorMsg;
+        return { success: false, error: "Extension script failed: " + lastErrorMsg };
     } catch (err) {
-        ws.send(JSON.stringify({
-            req_id: data.req_id,
-            status: "error",
-            error: err.message
-        }));
+        runtimeState.lastError = err.message || "unknown_error";
+        return { success: false, error: err.message || "unknown_error" };
     } finally {
         if (newTabId) {
             try {
@@ -230,12 +250,51 @@ async function handleGetToken(data) {
     }
 }
 
+async function handleGetToken(data) {
+    const result = await generateTokenInFreshTab(data.action || "IMAGE_GENERATION");
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    if (result.success) {
+        ws.send(JSON.stringify({
+            req_id: data.req_id,
+            status: "success",
+            token: result.token
+        }));
+    } else {
+        ws.send(JSON.stringify({
+            req_id: data.req_id,
+            status: "error",
+            error: result.error || "unknown_error"
+        }));
+    }
+}
+
 chrome.storage.onChanged.addListener((changes, areaName) => {
     if (areaName !== "local") return;
-    if (changes.routeKey || changes.serverUrl || changes.clientLabel || changes.apiKey) {
+    if (changes.routeKey || changes.serverUrl || changes.clientLabel || changes.apiKey || changes.managedApiKeyId) {
         console.log("[Flow2API] Extension settings changed, reconnecting WebSocket...");
         closeSocket();
         connectWS();
+    }
+});
+
+chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+    if (!message || !message.type) return;
+    if (message.type === "get_status") {
+        sendResponse({ success: true, state: runtimeState });
+        return;
+    }
+    if (message.type === "reconnect_now") {
+        closeSocket();
+        connectWS()
+            .then(() => sendResponse({ success: true }))
+            .catch((err) => sendResponse({ success: false, error: err.message || "reconnect_failed" }));
+        return true;
+    }
+    if (message.type === "test_token") {
+        generateTokenInFreshTab(message.action || "IMAGE_GENERATION")
+            .then((result) => sendResponse(result))
+            .catch((err) => sendResponse({ success: false, error: err.message || "test_failed" }));
+        return true;
     }
 });
 

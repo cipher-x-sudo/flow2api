@@ -63,6 +63,11 @@ class FlowClient:
             "flow_remote_fallback_attempt",
             default=-1
         )
+        # Request-scoped managed API key identity for captcha worker isolation.
+        self._managed_api_key_id_ctx: contextvars.ContextVar[Optional[int]] = contextvars.ContextVar(
+            "flow_managed_api_key_id",
+            default=None,
+        )
         self._remote_browser_prefill_last_sent: Dict[str, float] = {}
         # Last reCAPTCHA action for narrative logs (IMAGE_GENERATION vs VIDEO_GENERATION, etc.)
         self._last_recaptcha_action: Optional[str] = None
@@ -135,6 +140,21 @@ class FlowClient:
 
     def _set_remote_fallback_attempt(self, attempt_index: int) -> None:
         self._remote_fallback_attempt_ctx.set(int(attempt_index))
+
+    def set_managed_api_key_id(self, api_key_id: Optional[int]) -> None:
+        """Bind managed API key id to current request context."""
+        try:
+            normalized = int(api_key_id) if api_key_id is not None else None
+        except (TypeError, ValueError):
+            normalized = None
+        self._managed_api_key_id_ctx.set(normalized)
+
+    def get_managed_api_key_id(self) -> Optional[int]:
+        value = self._managed_api_key_id_ctx.get()
+        return int(value) if isinstance(value, int) else None
+
+    def clear_managed_api_key_id(self) -> None:
+        self._managed_api_key_id_ctx.set(None)
 
     def _is_headed_docker_runtime(self) -> bool:
         raw = str(os.environ.get("ALLOW_DOCKER_HEADED_CAPTCHA", "")).strip().lower()
@@ -2773,10 +2793,14 @@ class FlowClient:
             - 其他模式: browser_id 为 None
         """
         captcha_method = config.captcha_method
+        managed_api_key_id = self.get_managed_api_key_id()
         if int(retry_attempt) == 0:
             # Start of a new request chain.
             self._set_remote_fallback_attempt(-1)
-        debug_logger.log_info(f"[reCAPTCHA] 开始获取 token: method={captcha_method}, project_id={project_id}, action={action}")
+        debug_logger.log_info(
+            f"[reCAPTCHA] 开始获取 token: method={captcha_method}, project_id={project_id}, action={action}, "
+            f"managed_api_key_id={managed_api_key_id}"
+        )
         await self._log_recaptcha_headed_proxy_context(captcha_method, token_id)
         self._recaptcha_begin_request(action)
 
@@ -2790,6 +2814,7 @@ class FlowClient:
                     action,
                     timeout=extension_timeout,
                     token_id=token_id,
+                    managed_api_key_id=managed_api_key_id,
                 )
                 self._set_request_fingerprint(None)
                 return token, None

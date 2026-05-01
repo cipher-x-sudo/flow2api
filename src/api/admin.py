@@ -644,6 +644,15 @@ class UpdateManagedApiKeyRequest(BaseModel):
     endpoint_limits: Optional[Dict[str, Dict[str, int]]] = None
 
 
+class ExtensionWorkerBindRequest(BaseModel):
+    route_key: str
+    api_key_id: int
+
+
+class ExtensionWorkerUnbindRequest(BaseModel):
+    route_key: str
+
+
 class UpdateDebugConfigRequest(BaseModel):
     enabled: bool
 
@@ -1864,6 +1873,55 @@ async def delete_managed_api_key(
     return {"success": True, "message": "Managed API key deleted"}
 
 
+@router.get("/api/admin/extension/workers")
+async def list_extension_workers(token: str = Depends(verify_admin_token)):
+    from ..services.browser_captcha_extension import ExtensionCaptchaService
+
+    service = await ExtensionCaptchaService.get_instance(db=db)
+    active_workers = await service.list_active_workers()
+    bindings = await db.list_extension_worker_bindings()
+    queue_stats = service.get_queue_stats()
+    return {
+        "success": True,
+        "workers": active_workers,
+        "bindings": bindings,
+        "queue_stats": queue_stats,
+    }
+
+
+@router.post("/api/admin/extension/workers/bind")
+async def bind_extension_worker(
+    request: ExtensionWorkerBindRequest,
+    token: str = Depends(verify_admin_token),
+):
+    from ..services.browser_captcha_extension import ExtensionCaptchaService
+
+    route_key = (request.route_key or "").strip()
+    if not route_key:
+        raise HTTPException(status_code=400, detail="route_key is required")
+    detail = await db.get_api_key_detail(int(request.api_key_id))
+    if not detail:
+        raise HTTPException(status_code=404, detail="Managed API key not found")
+    service = await ExtensionCaptchaService.get_instance(db=db)
+    await service.bind_route_key(route_key, int(request.api_key_id))
+    return {"success": True, "message": "Worker binding updated"}
+
+
+@router.post("/api/admin/extension/workers/unbind")
+async def unbind_extension_worker(
+    request: ExtensionWorkerUnbindRequest,
+    token: str = Depends(verify_admin_token),
+):
+    from ..services.browser_captcha_extension import ExtensionCaptchaService
+
+    route_key = (request.route_key or "").strip()
+    if not route_key:
+        raise HTTPException(status_code=400, detail="route_key is required")
+    service = await ExtensionCaptchaService.get_instance(db=db)
+    await service.unbind_route_key(route_key)
+    return {"success": True, "message": "Worker binding removed"}
+
+
 @router.post("/api/admin/debug")
 async def update_debug_config(
     request: UpdateDebugConfigRequest,
@@ -2132,6 +2190,7 @@ async def update_captcha_config(
     session_refresh_scheduler_interval_minutes = request.get("session_refresh_scheduler_interval_minutes")
     session_refresh_scheduler_batch_size = request.get("session_refresh_scheduler_batch_size")
     session_refresh_scheduler_only_expiring_within_minutes = request.get("session_refresh_scheduler_only_expiring_within_minutes")
+    extension_queue_wait_timeout_seconds = request.get("extension_queue_wait_timeout_seconds")
 
     # 验证浏览器打码页面 URL
     if browser_captcha_page_url is not None:
@@ -2162,6 +2221,13 @@ async def update_captcha_config(
     except Exception:
         return {"success": False, "message": "远程打码超时时间必须是整数秒"}
     browser_fallback_to_remote_browser = bool(browser_fallback_to_remote_browser)
+    if extension_queue_wait_timeout_seconds is not None:
+        try:
+            extension_queue_wait_timeout_seconds = int(extension_queue_wait_timeout_seconds)
+        except Exception:
+            return {"success": False, "message": "extension_queue_wait_timeout_seconds must be an integer"}
+        if extension_queue_wait_timeout_seconds < 1 or extension_queue_wait_timeout_seconds > 120:
+            return {"success": False, "message": "extension_queue_wait_timeout_seconds must be between 1 and 120"}
 
     if captcha_method == "remote_browser":
         if not (remote_browser_base_url or "").strip():
@@ -2207,6 +2273,7 @@ async def update_captcha_config(
         session_refresh_scheduler_interval_minutes=session_refresh_scheduler_interval_minutes,
         session_refresh_scheduler_batch_size=session_refresh_scheduler_batch_size,
         session_refresh_scheduler_only_expiring_within_minutes=session_refresh_scheduler_only_expiring_within_minutes,
+        extension_queue_wait_timeout_seconds=extension_queue_wait_timeout_seconds,
     )
 
     # 🔥 Hot reload: sync database config to memory
@@ -2302,6 +2369,9 @@ async def get_captcha_config(token: str = Depends(verify_admin_token)):
         ),
         "session_refresh_scheduler_only_expiring_within_minutes": int(
             getattr(captcha_config, "session_refresh_scheduler_only_expiring_within_minutes", 60) or 60
+        ),
+        "extension_queue_wait_timeout_seconds": int(
+            getattr(captcha_config, "extension_queue_wait_timeout_seconds", 20) or 20
         ),
     }
 

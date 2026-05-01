@@ -1950,7 +1950,9 @@ async def captcha_websocket_endpoint(websocket: WebSocket):
         await websocket.close(code=1008, reason="Invalid API key")
         return
 
-    service = await ExtensionCaptchaService.get_instance()
+    service = await ExtensionCaptchaService.get_instance(
+        db=(generation_handler.db if generation_handler is not None else None)
+    )
     await service.connect(websocket)
     try:
         while True:

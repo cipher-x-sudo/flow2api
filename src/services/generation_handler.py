@@ -851,6 +851,8 @@ class GenerationHandler:
         # 防止并发链路复用到上一次请求的指纹上下文
         if hasattr(self.flow_client, "clear_request_fingerprint"):
             self.flow_client.clear_request_fingerprint()
+        if hasattr(self.flow_client, "set_managed_api_key_id"):
+            self.flow_client.set_managed_api_key_id(api_key_id)
 
         # 1. 验证模型
         if model not in MODEL_CONFIG:
@@ -1188,6 +1190,8 @@ class GenerationHandler:
                 yield self._create_stream_chunk(f"❌ {error_msg}\n")
             yield self._create_error_response(error_msg, status_code=500)
         finally:
+            if hasattr(self.flow_client, "clear_managed_api_key_id"):
+                self.flow_client.clear_managed_api_key_id()
             if pending_token_state.get("active") and token and self.load_balancer:
                 await self.load_balancer.release_pending(
                     token.id,

@@ -44,6 +44,7 @@ type CaptchaForm = {
   session_refresh_scheduler_interval_minutes: number
   session_refresh_scheduler_batch_size: number
   session_refresh_scheduler_only_expiring_within_minutes: number
+  extension_queue_wait_timeout_seconds: number
   personal_proxy_enabled: boolean
   personal_proxy_url: string
 }
@@ -82,8 +83,25 @@ const defaultCaptcha: CaptchaForm = {
   session_refresh_scheduler_interval_minutes: 30,
   session_refresh_scheduler_batch_size: 10,
   session_refresh_scheduler_only_expiring_within_minutes: 60,
+  extension_queue_wait_timeout_seconds: 20,
   personal_proxy_enabled: false,
   personal_proxy_url: "",
+}
+
+type ExtensionWorkerRow = {
+  connection_id: number
+  route_key: string
+  client_label: string
+  managed_api_key_id: number | null
+  binding_source: string
+  connected_at: number
+}
+
+type ExtensionBindingRow = {
+  id: number
+  route_key: string
+  api_key_id: number
+  api_key_label?: string
 }
 
 export function SystemSettings({ active }: { active: boolean }) {
@@ -114,13 +132,18 @@ export function SystemSettings({ active }: { active: boolean }) {
   const [pluginAutoEnable, setPluginAutoEnable] = useState(false)
 
   const [captcha, setCaptcha] = useState<CaptchaForm>(defaultCaptcha)
+  const [extensionWorkers, setExtensionWorkers] = useState<ExtensionWorkerRow[]>([])
+  const [extensionBindings, setExtensionBindings] = useState<ExtensionBindingRow[]>([])
+  const [managedKeys, setManagedKeys] = useState<Array<{ id: number; label?: string; key_prefix?: string }>>([])
+  const [bindRouteKey, setBindRouteKey] = useState("")
+  const [bindApiKeyId, setBindApiKeyId] = useState("")
 
   const [busy, setBusy] = useState(false)
 
   const loadAll = useCallback(async () => {
     if (!token || !active) return
 
-    const [a, p, g, c, plug, cap] = await Promise.all([
+    const [a, p, g, c, plug, cap, keysResp, workersResp] = await Promise.all([
       adminJson<{
         admin_username?: string
         api_key?: string
@@ -141,6 +164,15 @@ export function SystemSettings({ active }: { active: boolean }) {
         token
       ),
       adminJson<Record<string, unknown>>("/api/captcha/config", token),
+      adminJson<{ success?: boolean; keys?: Array<{ id: number; label?: string; key_prefix?: string }> }>(
+        "/api/admin/managed-apikeys",
+        token
+      ),
+      adminJson<{
+        success?: boolean
+        workers?: ExtensionWorkerRow[]
+        bindings?: ExtensionBindingRow[]
+      }>("/api/admin/extension/workers", token),
     ])
 
     if (a.data) {
@@ -210,9 +242,17 @@ export function SystemSettings({ active }: { active: boolean }) {
         session_refresh_scheduler_only_expiring_within_minutes: Number(
           raw.session_refresh_scheduler_only_expiring_within_minutes ?? 60
         ),
+        extension_queue_wait_timeout_seconds: Number(raw.extension_queue_wait_timeout_seconds ?? 20),
         personal_proxy_enabled: !!raw.browser_proxy_enabled,
         personal_proxy_url: String(raw.browser_proxy_url ?? ""),
       }))
+    }
+    if (keysResp.ok && keysResp.data?.success) {
+      setManagedKeys(Array.isArray(keysResp.data.keys) ? keysResp.data.keys : [])
+    }
+    if (workersResp.ok && workersResp.data?.success) {
+      setExtensionWorkers(Array.isArray(workersResp.data.workers) ? workersResp.data.workers : [])
+      setExtensionBindings(Array.isArray(workersResp.data.bindings) ? workersResp.data.bindings : [])
     }
   }, [token, active])
 
@@ -485,6 +525,7 @@ export function SystemSettings({ active }: { active: boolean }) {
           session_refresh_scheduler_batch_size: captcha.session_refresh_scheduler_batch_size,
           session_refresh_scheduler_only_expiring_within_minutes:
             captcha.session_refresh_scheduler_only_expiring_within_minutes,
+          extension_queue_wait_timeout_seconds: captcha.extension_queue_wait_timeout_seconds,
         }),
       })
       if (!r) return
@@ -492,6 +533,60 @@ export function SystemSettings({ active }: { active: boolean }) {
       if (d.success) {
         toast.success("Captcha config saved")
         await loadAll()
+      } else toast.error(d.message || "Failed")
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const refreshExtensionWorkers = async () => {
+    if (!token) return
+    const r = await adminJson<{ success?: boolean; workers?: ExtensionWorkerRow[]; bindings?: ExtensionBindingRow[] }>(
+      "/api/admin/extension/workers",
+      token
+    )
+    if (!r.ok || !r.data?.success) return
+    setExtensionWorkers(Array.isArray(r.data.workers) ? r.data.workers : [])
+    setExtensionBindings(Array.isArray(r.data.bindings) ? r.data.bindings : [])
+  }
+
+  const bindExtensionWorker = async () => {
+    if (!token) return
+    const routeKey = bindRouteKey.trim()
+    const apiKeyId = parseInt(bindApiKeyId, 10)
+    if (!routeKey) return toast.error("Route key required")
+    if (!Number.isFinite(apiKeyId) || apiKeyId <= 0) return toast.error("Managed API key ID required")
+    setBusy(true)
+    try {
+      const r = await adminFetch("/api/admin/extension/workers/bind", token, {
+        method: "POST",
+        body: JSON.stringify({ route_key: routeKey, api_key_id: apiKeyId }),
+      })
+      if (!r) return
+      const d = await r.json()
+      if (d.success) {
+        toast.success("Worker binding saved")
+        setBindRouteKey("")
+        await refreshExtensionWorkers()
+      } else toast.error(d.message || "Failed")
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const unbindExtensionWorker = async (routeKey: string) => {
+    if (!token) return
+    setBusy(true)
+    try {
+      const r = await adminFetch("/api/admin/extension/workers/unbind", token, {
+        method: "POST",
+        body: JSON.stringify({ route_key: routeKey }),
+      })
+      if (!r) return
+      const d = await r.json()
+      if (d.success) {
+        toast.success("Worker binding removed")
+        await refreshExtensionWorkers()
       } else toast.error(d.message || "Failed")
     } finally {
       setBusy(false)
@@ -730,6 +825,24 @@ export function SystemSettings({ active }: { active: boolean }) {
               </SelectContent>
             </Select>
           </div>
+          <div>
+            <Label>Extension queue wait timeout (s)</Label>
+            <Input
+              type="number"
+              min={1}
+              max={120}
+              value={captcha.extension_queue_wait_timeout_seconds}
+              onChange={(e) =>
+                setCaptcha((c) => ({
+                  ...c,
+                  extension_queue_wait_timeout_seconds: Math.max(1, Math.min(120, parseInt(e.target.value, 10) || 20)),
+                }))
+              }
+            />
+            <p className="text-xs text-muted-foreground mt-1">
+              Managed-key requests wait in their own queue up to this timeout before failing.
+            </p>
+          </div>
 
           {(m === "yescaptcha" || !m) && (
             <div className="space-y-2 border rounded-md p-3">
@@ -950,6 +1063,92 @@ export function SystemSettings({ active }: { active: boolean }) {
           <Button onClick={saveCaptcha} disabled={busy}>
             Save captcha settings
           </Button>
+        </CardContent>
+      </Card>
+
+      <Card className="lg:col-span-2">
+        <CardHeader>
+          <CardTitle>Extension Worker Binding</CardTitle>
+          <CardDescription>
+            Bind extension `route_key` to a managed API key for per-key captcha isolation.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+            <Input
+              placeholder="Route key (e.g. 9223)"
+              value={bindRouteKey}
+              onChange={(e) => setBindRouteKey(e.target.value)}
+            />
+            <Select value={bindApiKeyId} onValueChange={setBindApiKeyId}>
+              <SelectTrigger>
+                <SelectValue placeholder="Select managed API key" />
+              </SelectTrigger>
+              <SelectContent>
+                {managedKeys.map((k) => (
+                  <SelectItem key={k.id} value={String(k.id)}>
+                    #{k.id} {k.label || k.key_prefix || "managed-key"}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <div className="flex gap-2">
+              <Button onClick={bindExtensionWorker} disabled={busy}>
+                Bind
+              </Button>
+              <Button variant="outline" onClick={refreshExtensionWorkers} disabled={busy}>
+                Refresh
+              </Button>
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <Label>Active workers</Label>
+            <div className="rounded-md border">
+              <div className="grid grid-cols-5 gap-2 px-3 py-2 text-xs font-medium border-b">
+                <span>Route key</span>
+                <span>Label</span>
+                <span>Managed key</span>
+                <span>Source</span>
+                <span>Connected at</span>
+              </div>
+              {(extensionWorkers.length ? extensionWorkers : []).map((w) => (
+                <div key={`${w.connection_id}-${w.route_key}`} className="grid grid-cols-5 gap-2 px-3 py-2 text-xs border-b last:border-b-0">
+                  <span className="font-mono">{w.route_key || "(empty)"}</span>
+                  <span>{w.client_label || "-"}</span>
+                  <span>{w.managed_api_key_id ?? "-"}</span>
+                  <span>{w.binding_source || "-"}</span>
+                  <span>{w.connected_at ? new Date(w.connected_at * 1000).toLocaleTimeString() : "-"}</span>
+                </div>
+              ))}
+              {extensionWorkers.length === 0 ? <div className="px-3 py-3 text-xs text-muted-foreground">No active workers</div> : null}
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <Label>Persisted bindings</Label>
+            <div className="rounded-md border">
+              <div className="grid grid-cols-4 gap-2 px-3 py-2 text-xs font-medium border-b">
+                <span>Route key</span>
+                <span>Managed key</span>
+                <span>Label</span>
+                <span>Action</span>
+              </div>
+              {(extensionBindings.length ? extensionBindings : []).map((b) => (
+                <div key={`${b.id}-${b.route_key}`} className="grid grid-cols-4 gap-2 px-3 py-2 text-xs border-b last:border-b-0">
+                  <span className="font-mono">{b.route_key}</span>
+                  <span>{b.api_key_id}</span>
+                  <span>{b.api_key_label || "-"}</span>
+                  <span>
+                    <Button size="sm" variant="outline" onClick={() => unbindExtensionWorker(b.route_key)} disabled={busy}>
+                      Unbind
+                    </Button>
+                  </span>
+                </div>
+              ))}
+              {extensionBindings.length === 0 ? <div className="px-3 py-3 text-xs text-muted-foreground">No persisted bindings</div> : null}
+            </div>
+          </div>
         </CardContent>
       </Card>
     </div>

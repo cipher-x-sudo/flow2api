@@ -90,8 +90,14 @@
       <label for="apiKey">API Key</label>
       <input id="apiKey" type="password" placeholder="在这里粘贴后端 API Key">
 
+      <label for="managedApiKeyId">Managed API Key ID (optional)</label>
+      <input id="managedApiKeyId" type="text" placeholder="例如 12（用于按 managed key 隔离）">
+
       <button id="saveBtn" type="button">保存</button>
+      <button id="reconnectBtn" type="button" style="margin-left:8px;background:#1f2937;">立即重连</button>
+      <button id="testBtn" type="button" style="margin-left:8px;background:#374151;">测试打码</button>
       <div class="status" id="status"></div>
+      <div class="hint" id="runtimeStatus">连接状态：未知</div>
       <div class="hint">先配置 API Key，再在管理台 token 里填写同样的 <code>Route Key</code>（例如 9223 对 9223）。</div>
     </div>
   </div>

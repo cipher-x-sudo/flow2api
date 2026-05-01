@@ -244,6 +244,7 @@ class Database:
             session_refresh_scheduler_interval_minutes = 30
             session_refresh_scheduler_batch_size = 10
             session_refresh_scheduler_only_expiring_within_minutes = 60
+            extension_queue_wait_timeout_seconds = 20
 
             if config_dict:
                 captcha_config = config_dict.get("captcha", {})
@@ -280,6 +281,10 @@ class Database:
                     "session_refresh_scheduler_only_expiring_within_minutes",
                     60,
                 )
+                extension_queue_wait_timeout_seconds = captcha_config.get(
+                    "extension_queue_wait_timeout_seconds",
+                    20,
+                )
             try:
                 remote_browser_timeout = max(5, int(remote_browser_timeout))
             except Exception:
@@ -313,9 +318,10 @@ class Database:
                     session_refresh_overall_timeout_seconds, session_refresh_update_st_from_cookie,
                     session_refresh_fail_if_st_refresh_fails, session_refresh_local_only,
                     session_refresh_scheduler_enabled, session_refresh_scheduler_interval_minutes,
-                    session_refresh_scheduler_batch_size, session_refresh_scheduler_only_expiring_within_minutes
+                    session_refresh_scheduler_batch_size, session_refresh_scheduler_only_expiring_within_minutes,
+                    extension_queue_wait_timeout_seconds
                 )
-                VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 captcha_method,
                 yescaptcha_api_key,
@@ -342,6 +348,7 @@ class Database:
                 max(1, int(session_refresh_scheduler_interval_minutes or 30)),
                 max(1, int(session_refresh_scheduler_batch_size or 10)),
                 max(1, int(session_refresh_scheduler_only_expiring_within_minutes or 60)),
+                max(1, min(120, int(extension_queue_wait_timeout_seconds or 20))),
             ))
 
         # Ensure plugin_config has a row
@@ -430,6 +437,7 @@ class Database:
                         remote_browser_base_url TEXT DEFAULT '',
                         remote_browser_api_key TEXT DEFAULT '',
                         remote_browser_timeout INTEGER DEFAULT 60,
+                        extension_queue_wait_timeout_seconds INTEGER DEFAULT 20,
                         website_key TEXT DEFAULT '6LdsFiUsAAAAAIjVDZcuLhaHiDn5nnHVXVRQGeMV',
                         page_action TEXT DEFAULT 'IMAGE_GENERATION',
                         browser_proxy_enabled BOOLEAN DEFAULT 0,
@@ -449,6 +457,19 @@ class Database:
                         auto_enable_on_update BOOLEAN DEFAULT 1,
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+
+            if not await self._table_exists(db, "extension_worker_bindings"):
+                print("  ✓ Creating missing table: extension_worker_bindings")
+                await db.execute("""
+                    CREATE TABLE extension_worker_bindings (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        route_key TEXT NOT NULL UNIQUE,
+                        api_key_id INTEGER NOT NULL,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY (api_key_id) REFERENCES api_keys(id)
                     )
                 """)
 
@@ -668,6 +689,7 @@ class Database:
                     ("session_refresh_scheduler_interval_minutes", "INTEGER DEFAULT 30"),
                     ("session_refresh_scheduler_batch_size", "INTEGER DEFAULT 10"),
                     ("session_refresh_scheduler_only_expiring_within_minutes", "INTEGER DEFAULT 60"),
+                    ("extension_queue_wait_timeout_seconds", "INTEGER DEFAULT 20"),
                 ]
 
                 for col_name, col_type in captcha_columns_to_add:
@@ -758,6 +780,7 @@ class Database:
             await db.execute("CREATE INDEX IF NOT EXISTS idx_request_logs_api_key_id_created_at ON request_logs(api_key_id, created_at DESC)")
             await db.execute("CREATE INDEX IF NOT EXISTS idx_cache_files_api_key_filename ON cache_files(api_key_id, filename)")
             await db.execute("CREATE INDEX IF NOT EXISTS idx_cache_files_api_key_project ON cache_files(api_key_id, flow_project_id)")
+            await db.execute("CREATE INDEX IF NOT EXISTS idx_extension_worker_bindings_api_key_id ON extension_worker_bindings(api_key_id)")
 
             await db.commit()
             print("Database migration check completed.")
@@ -993,6 +1016,7 @@ class Database:
                     remote_browser_base_url TEXT DEFAULT '',
                     remote_browser_api_key TEXT DEFAULT '',
                     remote_browser_timeout INTEGER DEFAULT 60,
+                    extension_queue_wait_timeout_seconds INTEGER DEFAULT 20,
                     browser_fallback_to_remote_browser BOOLEAN DEFAULT 1,
                     website_key TEXT DEFAULT '6LdsFiUsAAAAAIjVDZcuLhaHiDn5nnHVXVRQGeMV',
                     page_action TEXT DEFAULT 'IMAGE_GENERATION',
@@ -1067,6 +1091,16 @@ class Database:
                     account_id INTEGER NOT NULL,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     UNIQUE(api_key_id, account_id),
+                    FOREIGN KEY (api_key_id) REFERENCES api_keys(id)
+                )
+            """)
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS extension_worker_bindings (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    route_key TEXT NOT NULL UNIQUE,
+                    api_key_id INTEGER NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (api_key_id) REFERENCES api_keys(id)
                 )
             """)
@@ -2603,6 +2637,7 @@ class Database:
         session_refresh_scheduler_interval_minutes: int = None,
         session_refresh_scheduler_batch_size: int = None,
         session_refresh_scheduler_only_expiring_within_minutes: int = None,
+        extension_queue_wait_timeout_seconds: int = None,
     ):
         """Update captcha configuration"""
         async with self._connect(write=True) as db:
@@ -2710,6 +2745,11 @@ class Database:
                     if session_refresh_scheduler_only_expiring_within_minutes is not None
                     else current.get("session_refresh_scheduler_only_expiring_within_minutes", 60)
                 )
+                new_extension_queue_wait_timeout = (
+                    extension_queue_wait_timeout_seconds
+                    if extension_queue_wait_timeout_seconds is not None
+                    else current.get("extension_queue_wait_timeout_seconds", 20)
+                )
                 new_remote_timeout = max(5, int(new_remote_timeout)) if new_remote_timeout is not None else 60
                 new_personal_project_pool_size = max(1, min(50, int(new_personal_project_pool_size)))
                 new_personal_max_tabs = max(1, min(50, int(new_personal_max_tabs)))  # 限制1-50
@@ -2721,6 +2761,7 @@ class Database:
                 new_session_refresh_scheduler_only_expiring_within_minutes = max(
                     1, min(10080, int(new_session_refresh_scheduler_only_expiring_within_minutes))
                 )
+                new_extension_queue_wait_timeout = max(1, min(120, int(new_extension_queue_wait_timeout)))
                 new_session_refresh_warmup_urls = (
                     str(new_session_refresh_warmup_urls or "").strip()
                     or "https://labs.google/fx/tools/flow,https://labs.google/fx"
@@ -2745,6 +2786,7 @@ class Database:
                         session_refresh_local_only = ?, session_refresh_scheduler_enabled = ?,
                         session_refresh_scheduler_interval_minutes = ?, session_refresh_scheduler_batch_size = ?,
                         session_refresh_scheduler_only_expiring_within_minutes = ?,
+                        extension_queue_wait_timeout_seconds = ?,
                         updated_at = CURRENT_TIMESTAMP
                     WHERE id = 1
                 """, (new_method, new_yes_key, new_yes_url, new_cap_key, new_cap_url,
@@ -2760,7 +2802,8 @@ class Database:
                       bool(new_session_refresh_fail_if_st_refresh_fails),
                       bool(new_session_refresh_local_only), bool(new_session_refresh_scheduler_enabled),
                       new_session_refresh_scheduler_interval_minutes, new_session_refresh_scheduler_batch_size,
-                      new_session_refresh_scheduler_only_expiring_within_minutes))
+                      new_session_refresh_scheduler_only_expiring_within_minutes,
+                      new_extension_queue_wait_timeout))
             else:
                 new_method = captcha_method if captcha_method is not None else "yescaptcha"
                 new_yes_key = yescaptcha_api_key if yescaptcha_api_key is not None else ""
@@ -2831,6 +2874,13 @@ class Database:
                         ),
                     ),
                 )
+                new_extension_queue_wait_timeout = max(
+                    1,
+                    min(
+                        120,
+                        int(extension_queue_wait_timeout_seconds if extension_queue_wait_timeout_seconds is not None else 20),
+                    ),
+                )
 
                 await db.execute("""
                     INSERT INTO captcha_config (id, captcha_method, yescaptcha_api_key, yescaptcha_base_url,
@@ -2848,8 +2898,9 @@ class Database:
                         session_refresh_update_st_from_cookie, session_refresh_fail_if_st_refresh_fails,
                         session_refresh_local_only, session_refresh_scheduler_enabled,
                         session_refresh_scheduler_interval_minutes, session_refresh_scheduler_batch_size,
-                        session_refresh_scheduler_only_expiring_within_minutes)
-                    VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        session_refresh_scheduler_only_expiring_within_minutes,
+                        extension_queue_wait_timeout_seconds)
+                    VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (new_method, new_yes_key, new_yes_url, new_cap_key, new_cap_url,
                       new_ez_key, new_ez_url, new_cs_key, new_cs_url,
                       (new_remote_base_url or "").strip(), (new_remote_api_key or "").strip(), new_remote_timeout,
@@ -2862,7 +2913,8 @@ class Database:
                       new_session_refresh_update_st_from_cookie, new_session_refresh_fail_if_st_refresh_fails,
                       new_session_refresh_local_only, new_session_refresh_scheduler_enabled,
                       new_session_refresh_scheduler_interval_minutes, new_session_refresh_scheduler_batch_size,
-                      new_session_refresh_scheduler_only_expiring_within_minutes))
+                      new_session_refresh_scheduler_only_expiring_within_minutes,
+                      new_extension_queue_wait_timeout))
 
             await db.commit()
 
@@ -3281,3 +3333,69 @@ class Database:
                     (safe_limit, safe_offset),
                 )
             return [dict(row) for row in await cursor.fetchall()]
+
+    async def get_extension_worker_binding_for_route_key(self, route_key: str) -> Optional[Dict[str, Any]]:
+        normalized = (route_key or "").strip()
+        if not normalized:
+            return None
+        async with self._connect() as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                """
+                SELECT id, route_key, api_key_id, created_at, updated_at
+                FROM extension_worker_bindings
+                WHERE route_key = ?
+                """,
+                (normalized,),
+            )
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+
+    async def upsert_extension_worker_binding(self, route_key: str, api_key_id: int) -> None:
+        normalized = (route_key or "").strip()
+        if not normalized:
+            raise ValueError("route_key is required")
+        normalized_key_id = int(api_key_id)
+        async with self._connect(write=True) as db:
+            await db.execute(
+                """
+                INSERT INTO extension_worker_bindings (route_key, api_key_id, updated_at)
+                VALUES (?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(route_key) DO UPDATE SET
+                    api_key_id = excluded.api_key_id,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (normalized, normalized_key_id),
+            )
+            await db.commit()
+
+    async def delete_extension_worker_binding(self, route_key: str) -> None:
+        normalized = (route_key or "").strip()
+        if not normalized:
+            return
+        async with self._connect(write=True) as db:
+            await db.execute(
+                "DELETE FROM extension_worker_bindings WHERE route_key = ?",
+                (normalized,),
+            )
+            await db.commit()
+
+    async def list_extension_worker_bindings(self) -> List[Dict[str, Any]]:
+        async with self._connect() as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                """
+                SELECT
+                    b.id,
+                    b.route_key,
+                    b.api_key_id,
+                    b.created_at,
+                    b.updated_at,
+                    k.label AS api_key_label
+                FROM extension_worker_bindings b
+                LEFT JOIN api_keys k ON k.id = b.api_key_id
+                ORDER BY b.updated_at DESC, b.route_key ASC
+                """
+            )
+            rows = await cursor.fetchall()
+            return [dict(row) for row in rows]
