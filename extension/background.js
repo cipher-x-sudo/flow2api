@@ -92,6 +92,49 @@ function closeSocket() {
     }
 }
 
+function resetRuntimeStatePartial() {
+    runtimeState.wsStatus = "idle";
+    runtimeState.connectionMode = "";
+    runtimeState.routeKey = "";
+    runtimeState.workerSessionId = "";
+    runtimeState.managedApiKeyId = "";
+    runtimeState.dedicatedWorkerId = "";
+    runtimeState.dedicatedTokenId = "";
+    runtimeState.bindingSource = "";
+    runtimeState.lastRegisterStatus = "never";
+    runtimeState.lastRegisterError = "";
+    runtimeState.lastError = "";
+}
+
+/** Clear saved settings, drop stable instance id, and reconnect (used by options Reset). */
+function resetExtensionToDefaults(done) {
+    cachedInstanceId = null;
+    resetRuntimeStatePartial();
+    closeSocket();
+    chrome.storage.local.remove(["extensionInstanceId"], () => {
+        chrome.storage.local.set(
+            {
+                serverUrl: DEFAULT_SETTINGS.serverUrl,
+                connectionMode: DEFAULT_SETTINGS.connectionMode,
+                apiKey: DEFAULT_SETTINGS.apiKey,
+                workerAuthKey: DEFAULT_SETTINGS.workerAuthKey,
+                routeKey: DEFAULT_SETTINGS.routeKey,
+                clientLabel: DEFAULT_SETTINGS.clientLabel,
+            },
+            () => {
+                console.log("[Flow2API] Extension reset to defaults.");
+                connectWS()
+                    .then(() => {
+                        if (typeof done === "function") done(null);
+                    })
+                    .catch((err) => {
+                        if (typeof done === "function") done(err);
+                    });
+            }
+        );
+    });
+}
+
 function sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
 }
@@ -417,6 +460,16 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         connectWS()
             .then(() => sendResponse({ success: true }))
             .catch((err) => sendResponse({ success: false, error: err.message || "reconnect_failed" }));
+        return true;
+    }
+    if (message.type === "reset_extension") {
+        resetExtensionToDefaults((err) => {
+            if (err) {
+                sendResponse({ success: false, error: err.message || "reset_failed" });
+            } else {
+                sendResponse({ success: true });
+            }
+        });
         return true;
     }
     if (message.type === "test_token") {

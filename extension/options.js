@@ -189,6 +189,26 @@ function reconnectNow() {
   });
 }
 
+function runResetExtension() {
+  if (!confirm("Reset this extension?\n\nThis removes WebSocket URL, API key, worker key, labels, route key, and assigns a new instance id. The background worker reconnects with default local URL.")) {
+    return;
+  }
+  setStatus("Resetting extension…", false);
+  chrome.runtime.sendMessage({ type: "reset_extension" }, (resp) => {
+    if (chrome.runtime.lastError) {
+      setStatus(`Reset failed: ${chrome.runtime.lastError.message}`, true);
+      return;
+    }
+    if (!resp || !resp.success) {
+      setStatus(`Reset failed: ${(resp && resp.error) || "unknown"}`, true);
+      return;
+    }
+    loadSettings();
+    setStatus("Extension reset. Defaults loaded; background reconnected.");
+    setTimeout(refreshRuntimeStatus, 400);
+  });
+}
+
 function runTokenTest() {
   setStatus("Running token test, please wait...");
   chrome.runtime.sendMessage({ type: "test_token", action: "IMAGE_GENERATION" }, (resp) => {
@@ -216,6 +236,7 @@ document.addEventListener("DOMContentLoaded", () => {
   $("saveBtn").addEventListener("click", saveSettings);
   $("reconnectBtn").addEventListener("click", reconnectNow);
   $("testBtn").addEventListener("click", runTokenTest);
+  $("resetBtn").addEventListener("click", runResetExtension);
   refreshRuntimeStatus();
   setInterval(refreshRuntimeStatus, 3000);
 });
