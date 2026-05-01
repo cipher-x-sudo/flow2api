@@ -875,9 +875,9 @@ export function SystemSettings({ active }: { active: boolean }) {
             </Select>
             {m === "extension" ? (
               <p className="text-xs text-muted-foreground mt-1">
-                Uses your Chrome extension connected to <code className="rounded bg-muted px-1">/captcha_ws</code> — not
-                headed Playwright/Chromium. Configure queue timeout and worker bindings in the sections that appear
-                only for this method.
+                Uses your Chrome extension connected to <code className="rounded bg-muted px-1">/captcha_ws</code> instead
+                of headed Playwright/Chromium. Captcha method remains global, but workers are isolated per managed API
+                key via route-key bindings.
               </p>
             ) : null}
           </div>
@@ -897,8 +897,8 @@ export function SystemSettings({ active }: { active: boolean }) {
                 }
               />
               <p className="text-xs text-muted-foreground mt-1">
-                When Method is Chrome extension, managed-key requests wait in their own queue up to this timeout before
-                failing.
+                Managed-key requests wait in their own queue up to this timeout. If no matching worker is online for
+                that key/route, the request fails (no gateway fallback).
               </p>
             </div>
           ) : null}

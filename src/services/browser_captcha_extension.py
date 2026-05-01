@@ -181,8 +181,28 @@ class ExtensionCaptchaService:
                 label = f"{label}:{conn.client_label}"
             if conn.managed_api_key_id is not None:
                 label = f"{label}@key{conn.managed_api_key_id}"
+            if conn.binding_source:
+                label = f"{label}#{conn.binding_source}"
             labels.append(label)
         return ", ".join(labels)
+
+    def _describe_workers_verbose(self) -> str:
+        if not self.active_connections:
+            return "none"
+        parts = []
+        for conn in self.active_connections:
+            route = conn.route_key or "(empty)"
+            label = conn.client_label or "-"
+            managed = (
+                str(conn.managed_api_key_id)
+                if conn.managed_api_key_id is not None
+                else "unbound"
+            )
+            source = conn.binding_source or "none"
+            parts.append(
+                f"route={route}, label={label}, managed_key={managed}, binding={source}"
+            )
+        return " | ".join(parts)
 
     def describe_routes(self) -> str:
         return self._describe_routes()
@@ -323,12 +343,14 @@ class ExtensionCaptchaService:
         )
         if conn is None:
             available = self._describe_routes() or "none"
+            workers_verbose = self._describe_workers_verbose()
             qkey = self._queue_key(managed_api_key_id)
             waiting_count = self._queue_waiters.get(qkey, 0)
             raise RuntimeError(
-                f"No Chrome Extension connection matches managed_api_key_id={managed_api_key_id}, "
-                f"token_id={token_id}, route_key='{route_key}' after waiting {queue_wait_timeout}s. "
-                f"Queue waiters={waiting_count}. Available route keys: {available}"
+                f"No Chrome Extension connection matched this request after waiting {queue_wait_timeout}s: "
+                f"managed_api_key_id={managed_api_key_id}, token_id={token_id}, route_key='{route_key}', "
+                f"queue={qkey}, queue_waiters={waiting_count}. "
+                f"Available route keys: {available}. Active workers: {workers_verbose}"
             )
 
         req_id = f"req_{uuid.uuid4().hex}"

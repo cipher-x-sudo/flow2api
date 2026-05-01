@@ -1883,6 +1883,8 @@ async def list_extension_workers(token: str = Depends(verify_admin_token)):
     queue_stats = service.get_queue_stats()
     return {
         "success": True,
+        "mode": "strict_managed_key_isolation",
+        "note": "Requests only use workers bound to the same managed API key/route and fail after queue timeout when missing.",
         "workers": active_workers,
         "bindings": bindings,
         "queue_stats": queue_stats,
@@ -1904,7 +1906,10 @@ async def bind_extension_worker(
         raise HTTPException(status_code=404, detail="Managed API key not found")
     service = await ExtensionCaptchaService.get_instance(db=db)
     await service.bind_route_key(route_key, int(request.api_key_id))
-    return {"success": True, "message": "Worker binding updated"}
+    return {
+        "success": True,
+        "message": "Worker binding updated. Requests for this managed key now require this worker route.",
+    }
 
 
 @router.post("/api/admin/extension/workers/unbind")
@@ -1919,7 +1924,10 @@ async def unbind_extension_worker(
         raise HTTPException(status_code=400, detail="route_key is required")
     service = await ExtensionCaptchaService.get_instance(db=db)
     await service.unbind_route_key(route_key)
-    return {"success": True, "message": "Worker binding removed"}
+    return {
+        "success": True,
+        "message": "Worker binding removed. Requests for this route will fail until a matching worker binds again.",
+    }
 
 
 @router.post("/api/admin/debug")

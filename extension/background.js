@@ -12,8 +12,11 @@ const DEFAULT_SETTINGS = {
 const runtimeState = {
     wsStatus: "idle",
     routeKey: "",
+    claimedManagedApiKeyId: "",
     managedApiKeyId: "",
+    bindingSource: "",
     lastRegisterStatus: "never",
+    lastRegisterError: "",
     lastError: ""
 };
 
@@ -91,8 +94,12 @@ async function connectWS() {
 
     const settings = await getSettings();
     runtimeState.routeKey = settings.routeKey;
+    runtimeState.claimedManagedApiKeyId = settings.managedApiKeyId;
     runtimeState.managedApiKeyId = settings.managedApiKeyId;
+    runtimeState.bindingSource = "";
     runtimeState.wsStatus = "connecting";
+    runtimeState.lastRegisterStatus = "pending";
+    runtimeState.lastRegisterError = "";
     runtimeState.lastError = "";
     const url = new URL(settings.serverUrl || DEFAULT_SETTINGS.serverUrl);
     if (settings.apiKey) {
@@ -138,10 +145,28 @@ async function connectWS() {
         }
 
         if (data.type === "register_ack") {
-            console.log("[Flow2API] Registered route key:", data.route_key || "(empty)");
-            runtimeState.lastRegisterStatus = data.status || "ok";
+            const ackStatus = data.status || "ok";
+            const ackError = String(data.error || "").trim();
+            runtimeState.lastRegisterStatus = ackStatus;
+            runtimeState.lastRegisterError = ackError;
+            runtimeState.bindingSource = String(data.binding_source || "");
             runtimeState.managedApiKeyId = String(data.managed_api_key_id || settings.managedApiKeyId || "");
-            runtimeState.lastError = data.error || "";
+            if (ackStatus === "error") {
+                runtimeState.wsStatus = "open_register_error";
+                runtimeState.lastError = ackError || "register_failed";
+                console.log("[Flow2API] Register ack error:", ackError || "unknown");
+            } else {
+                runtimeState.wsStatus = "open";
+                runtimeState.lastError = "";
+                console.log(
+                    "[Flow2API] Registered route key:",
+                    data.route_key || "(empty)",
+                    "managed_api_key_id=",
+                    runtimeState.managedApiKeyId || "-",
+                    "binding_source=",
+                    runtimeState.bindingSource || "-"
+                );
+            }
             return;
         }
 

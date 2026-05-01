@@ -76,7 +76,13 @@
   <div class="wrap">
     <div class="panel">
       <h1>Flow2API Captcha Worker</h1>
-      <p>Assign a dedicated route key to this browser instance so Flow2API can send captcha requests for the matching account to this exact worker.</p>
+      <p>
+        This worker is isolated per managed API key. Use the same managed key ID and route key from the admin panel
+        so only that API user can use this browser for captcha solving.
+      </p>
+
+      <label for="managedApiKeyId">Managed API Key ID</label>
+      <input id="managedApiKeyId" type="text" placeholder="Required, e.g. 12">
 
       <label for="routeKey">Route Key</label>
       <input id="routeKey" type="text" placeholder="e.g. 9223">
@@ -90,15 +96,15 @@
       <label for="apiKey">API Key</label>
       <input id="apiKey" type="password" placeholder="Paste backend API Key here">
 
-      <label for="managedApiKeyId">Managed API Key ID (optional)</label>
-      <input id="managedApiKeyId" type="text" placeholder="e.g. 12 (for managed-key isolation)">
-
       <button id="saveBtn" type="button">Save</button>
       <button id="reconnectBtn" type="button" style="margin-left:8px;background:#1f2937;">Reconnect Now</button>
       <button id="testBtn" type="button" style="margin-left:8px;background:#374151;">Test Token</button>
       <div class="status" id="status"></div>
       <div class="hint" id="runtimeStatus">Connection status: unknown</div>
-      <div class="hint">Set the API Key first, then use the same <code>Route Key</code> in the admin token settings (e.g. 9223 to 9223).</div>
+      <div class="hint">
+        Save checklist: set API Key, set managed key ID, and use the same <code>Route Key</code> as the token/account.
+        If this worker is offline, requests for that key fail after queue timeout (no gateway fallback).
+      </div>
     </div>
   </div>
   <script src="options.js"></script>

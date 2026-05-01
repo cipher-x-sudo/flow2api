@@ -61,8 +61,16 @@ function saveSettings() {
     setStatus("API Key cannot be empty.", true);
     return;
   }
-  if (settings.managedApiKeyId && !/^\d+$/.test(settings.managedApiKeyId)) {
+  if (!settings.managedApiKeyId) {
+    setStatus("Managed API Key ID is required for per-key isolation.", true);
+    return;
+  }
+  if (!/^\d+$/.test(settings.managedApiKeyId)) {
     setStatus("Managed API Key ID must be numeric.", true);
+    return;
+  }
+  if (parseInt(settings.managedApiKeyId, 10) <= 0) {
+    setStatus("Managed API Key ID must be a positive integer.", true);
     return;
   }
 
@@ -83,10 +91,13 @@ function updateRuntimeStatus(state) {
   }
   const ws = state.wsStatus || "unknown";
   const route = state.routeKey || "(empty)";
+  const claimedManaged = state.claimedManagedApiKeyId || "-";
   const managed = state.managedApiKeyId || "-";
   const ack = state.lastRegisterStatus || "unknown";
-  const last = state.lastError ? `, error: ${state.lastError}` : "";
-  el.textContent = `Connection status: ${ws}, route=${route}, managed_key=${managed}, register=${ack}${last}`;
+  const source = state.bindingSource || "unknown";
+  const ackError = state.lastRegisterError ? `, register_error=${state.lastRegisterError}` : "";
+  const last = state.lastError ? `, error=${state.lastError}` : "";
+  el.textContent = `Connection status: ${ws}, route=${route}, claimed_key=${claimedManaged}, resolved_key=${managed}, binding=${source}, register=${ack}${ackError}${last}`;
 }
 
 function refreshRuntimeStatus() {

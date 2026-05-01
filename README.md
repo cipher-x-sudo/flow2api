@@ -42,6 +42,20 @@
 
 - 自动更新st浏览器拓展：[Flow2API-Token-Updater](https://github.com/TheSmallHanCat/Flow2API-Token-Updater)
 
+### Chrome Extension per-key isolation setup
+
+When using captcha method `extension`, Flow2API keeps one global captcha mode but isolates workers per managed API key.
+
+1. Create a managed API key in admin panel (`/api/admin/managed-apikeys`).
+2. Set the token/account `extension_route_key` to a unique value (for example `9223`).
+3. In Chrome extension options, set:
+   - backend API key
+   - managed API key ID (required)
+   - same route key as the token/account
+4. Confirm in admin extension workers page (`/api/admin/extension/workers`) that route and managed key binding match.
+
+If a managed key has no matching extension worker online, requests wait up to `extension_queue_wait_timeout_seconds` and then fail (no gateway fallback).
+
 ### 方式一：Docker 部署（推荐）
 
 #### 标准模式（不使用代理）
