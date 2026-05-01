@@ -1,6 +1,7 @@
 import asyncio
 import json
 import time
+import uuid
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 
@@ -24,7 +25,7 @@ class ExtensionCaptchaService:
     def __init__(self, db=None):
         self.db = db
         self.active_connections: list[ExtensionConnection] = []
-        self.pending_requests: dict[str, asyncio.Future] = {}
+        self.pending_requests: dict[str, tuple[asyncio.Future, WebSocket]] = {}
 
     @classmethod
     async def get_instance(cls, db=None) -> "ExtensionCaptchaService":
@@ -143,7 +144,12 @@ class ExtensionCaptchaService:
 
             req_id = payload.get("req_id")
             if req_id and req_id in self.pending_requests:
-                future = self.pending_requests[req_id]
+                future, owner_websocket = self.pending_requests[req_id]
+                if websocket is not owner_websocket:
+                    debug_logger.log_warning(
+                        f"[Extension Captcha] Ignoring response from non-owner connection: {req_id}"
+                    )
+                    return
                 if not future.done():
                     future.set_result(payload)
         except Exception as e:
@@ -169,9 +175,9 @@ class ExtensionCaptchaService:
                 f"Available route keys: {available}"
             )
 
-        req_id = f"req_{int(time.time() * 1000)}_{id(self)}"
-        future = asyncio.Future()
-        self.pending_requests[req_id] = future
+        req_id = f"req_{uuid.uuid4().hex}"
+        future = asyncio.get_running_loop().create_future()
+        self.pending_requests[req_id] = (future, conn.websocket)
 
         request_data = {
             "type": "get_token",
@@ -194,16 +200,13 @@ class ExtensionCaptchaService:
 
             error_msg = result.get("error")
             debug_logger.log_error(f"[Extension Captcha] Error from extension: {error_msg}")
-            print(f"!!! EXTENSION ERROR: {error_msg} !!!")
             return None
 
         except asyncio.TimeoutError:
             debug_logger.log_error(f"[Extension Captcha] Timeout waiting for token (req_id: {req_id})")
-            print("!!! EXTENSION TIMEOUT !!!")
             return None
         except Exception as e:
             debug_logger.log_error(f"[Extension Captcha] Communication error: {e}")
-            print(f"!!! EXTENSION COMM ERROR: {e} !!!")
             return None
         finally:
             self.pending_requests.pop(req_id, None)

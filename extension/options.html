@@ -87,9 +87,12 @@
       <label for="serverUrl">WebSocket URL</label>
       <input id="serverUrl" type="text" placeholder="ws://127.0.0.1:8000/captcha_ws">
 
+      <label for="apiKey">API Key</label>
+      <input id="apiKey" type="password" placeholder="在这里粘贴后端 API Key">
+
       <button id="saveBtn" type="button">保存</button>
       <div class="status" id="status"></div>
-      <div class="hint">管理台 token 里填写同样的 <code>Route Key</code>，比如 9223 对 9223。</div>
+      <div class="hint">先配置 API Key，再在管理台 token 里填写同样的 <code>Route Key</code>（例如 9223 对 9223）。</div>
     </div>
   </div>
   <script src="options.js"></script>

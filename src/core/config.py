@@ -12,8 +12,11 @@ class Config:
         self._admin_password: Optional[str] = None
 
     def _load_config(self) -> Dict[str, Any]:
-        """Load configuration from setting.toml"""
-        config_path = Path(__file__).parent.parent.parent / "config" / "setting.toml"
+        """Load configuration from setting.toml, falling back to the example file."""
+        config_dir = Path(__file__).parent.parent.parent / "config"
+        config_path = config_dir / "setting.toml"
+        if not config_path.exists():
+            config_path = config_dir / "setting_example.toml"
         with open(config_path, "rb") as f:
             return tomli.load(f)
 

@@ -17,7 +17,7 @@ from pathlib import Path
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
-from ..core.auth import verify_api_key_flexible
+from ..core.auth import AuthManager, verify_api_key_flexible
 from ..core.api_key_manager import AuthContext
 from ..core.logger import debug_logger
 from ..core.account_tiers import normalize_user_paygate_tier, supports_model_for_tier
@@ -1936,6 +1936,20 @@ async def stream_generate_content(
 
 @router.websocket("/captcha_ws")
 async def captcha_websocket_endpoint(websocket: WebSocket):
+    api_key = (
+        websocket.query_params.get("key")
+        or websocket.query_params.get("api_key")
+        or websocket.headers.get("x-goog-api-key")
+    )
+    if not api_key:
+        auth_header = websocket.headers.get("authorization", "")
+        if auth_header.lower().startswith("bearer "):
+            api_key = auth_header[7:].strip()
+    if not api_key or not AuthManager.verify_api_key(api_key):
+        await websocket.accept()
+        await websocket.close(code=1008, reason="Invalid API key")
+        return
+
     service = await ExtensionCaptchaService.get_instance()
     await service.connect(websocket)
     try:

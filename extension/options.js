@@ -1,5 +1,6 @@
 const DEFAULT_SETTINGS = {
   serverUrl: "ws://127.0.0.1:8000/captcha_ws",
+  apiKey: "",
   routeKey: "",
   clientLabel: ""
 };
@@ -9,6 +10,7 @@ const $ = (id) => document.getElementById(id);
 function normalizeSettings(values) {
   return {
     serverUrl: (values.serverUrl || DEFAULT_SETTINGS.serverUrl).trim(),
+    apiKey: (values.apiKey || "").trim(),
     routeKey: (values.routeKey || "").trim(),
     clientLabel: (values.clientLabel || "").trim()
   };
@@ -33,6 +35,7 @@ function loadSettings() {
   chrome.storage.local.get(DEFAULT_SETTINGS, (stored) => {
     const settings = normalizeSettings(stored);
     $("serverUrl").value = settings.serverUrl;
+    $("apiKey").value = settings.apiKey;
     $("routeKey").value = settings.routeKey;
     $("clientLabel").value = settings.clientLabel;
   });
@@ -41,12 +44,17 @@ function loadSettings() {
 function saveSettings() {
   const settings = normalizeSettings({
     serverUrl: $("serverUrl").value,
+    apiKey: $("apiKey").value,
     routeKey: $("routeKey").value,
     clientLabel: $("clientLabel").value
   });
 
   if (!isValidWsUrl(settings.serverUrl)) {
     setStatus("WebSocket URL 必须以 ws:// 或 wss:// 开头。", true);
+    return;
+  }
+  if (!settings.apiKey) {
+    setStatus("API Key 不能为空。", true);
     return;
   }
 

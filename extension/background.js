@@ -4,6 +4,7 @@ let heartbeatInterval = null;
 
 const DEFAULT_SETTINGS = {
     serverUrl: "ws://127.0.0.1:8000/captcha_ws",
+    apiKey: "",
     routeKey: "",
     clientLabel: ""
 };
@@ -13,6 +14,7 @@ function getSettings() {
         chrome.storage.local.get(DEFAULT_SETTINGS, (stored) => {
             resolve({
                 serverUrl: (stored.serverUrl || DEFAULT_SETTINGS.serverUrl).trim(),
+                apiKey: (stored.apiKey || "").trim(),
                 routeKey: (stored.routeKey || "").trim(),
                 clientLabel: (stored.clientLabel || "").trim()
             });
@@ -74,6 +76,9 @@ async function connectWS() {
 
     const settings = await getSettings();
     const url = new URL(settings.serverUrl || DEFAULT_SETTINGS.serverUrl);
+    if (settings.apiKey) {
+        url.searchParams.set("key", settings.apiKey);
+    }
     if (settings.routeKey) {
         url.searchParams.set("route_key", settings.routeKey);
     }
@@ -227,7 +232,7 @@ async function handleGetToken(data) {
 
 chrome.storage.onChanged.addListener((changes, areaName) => {
     if (areaName !== "local") return;
-    if (changes.routeKey || changes.serverUrl || changes.clientLabel) {
+    if (changes.routeKey || changes.serverUrl || changes.clientLabel || changes.apiKey) {
         console.log("[Flow2API] Extension settings changed, reconnecting WebSocket...");
         closeSocket();
         connectWS();
