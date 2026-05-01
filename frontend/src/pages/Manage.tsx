@@ -1,4 +1,4 @@
-import { useMemo, useEffect } from "react"
+import { useMemo, useEffect, useState, useCallback } from "react"
 import { Link, useSearchParams } from "react-router-dom"
 import { Layout } from "../components/Layout"
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "../components/ui/tabs"
@@ -9,6 +9,8 @@ import { CacheManagement } from "../components/manage/CacheManagement"
 import { AgentGateway } from "../components/manage/AgentGateway"
 import { ApiKeyManagement } from "../components/manage/ApiKeyManagement"
 import { cn } from "@/lib/utils"
+import { useAuth } from "../contexts/AuthContext"
+import { adminJson } from "../lib/adminApi"
 
 const MANAGE_TABS = ["tokens", "apikeys", "settings", "logs", "cache", "agent"] as const
 type ManageTab = (typeof MANAGE_TABS)[number]
@@ -19,7 +21,9 @@ function parseManageTab(raw: string | null): ManageTab {
 }
 
 export default function Manage() {
+  const { token } = useAuth()
   const [searchParams, setSearchParams] = useSearchParams()
+  const [showAgentTab, setShowAgentTab] = useState(false)
   const tab = useMemo(
     () => parseManageTab(searchParams.get("tab")),
     [searchParams]
@@ -34,6 +38,29 @@ export default function Manage() {
       setSearchParams({}, { replace: true })
     }
   }, [searchParams, setSearchParams])
+
+  const refreshAgentVisibility = useCallback(async () => {
+    const resp = await adminJson<Record<string, unknown>>("/api/captcha/config", token)
+    if (!resp.ok || !resp.data) return
+    const captchaMethod = String(resp.data.captcha_method || "")
+    const browserFallback = resp.data.browser_fallback_to_remote_browser !== false
+    const visible = captchaMethod === "remote_browser" || (captchaMethod === "browser" && browserFallback)
+    setShowAgentTab(visible)
+  }, [token])
+
+  useEffect(() => {
+    void refreshAgentVisibility()
+    const timer = window.setInterval(() => {
+      void refreshAgentVisibility()
+    }, 5000)
+    return () => window.clearInterval(timer)
+  }, [refreshAgentVisibility])
+
+  useEffect(() => {
+    if (tab === "agent" && !showAgentTab) {
+      setTab("settings")
+    }
+  }, [tab, showAgentTab])
 
   return (
     <Layout>
@@ -80,14 +107,16 @@ export default function Manage() {
             >
               Cache management
             </TabsTrigger>
-            <TabsTrigger
-              value="agent"
-              className={cn(
-                "rounded-none border-b-2 border-transparent px-1 py-3 data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none"
-              )}
-            >
-              Agent gateway
-            </TabsTrigger>
+            {showAgentTab ? (
+              <TabsTrigger
+                value="agent"
+                className={cn(
+                  "rounded-none border-b-2 border-transparent px-1 py-3 data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none"
+                )}
+              >
+                Agent gateway
+              </TabsTrigger>
+            ) : null}
           </TabsList>
           <Link
             to="/test"
@@ -124,11 +153,13 @@ export default function Manage() {
             <CacheManagement active={true} />
           </div>
         </TabsContent>
-        <TabsContent value="agent" className="mt-0 outline-none focus-visible:ring-0">
-          <div className="animate-in fade-in duration-300">
-            <AgentGateway />
-          </div>
-        </TabsContent>
+        {showAgentTab ? (
+          <TabsContent value="agent" className="mt-0 outline-none focus-visible:ring-0">
+            <div className="animate-in fade-in duration-300">
+              <AgentGateway />
+            </div>
+          </TabsContent>
+        ) : null}
       </Tabs>
     </Layout>
   )
