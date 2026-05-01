@@ -75,12 +75,14 @@ function updateRuntimeStatus(state) {
   }
   const ws = state.wsStatus || "unknown";
   const route = state.routeKey || "(empty)";
+  const instance = state.instanceId || "-";
+  const workerSession = state.workerSessionId || "-";
   const managed = state.managedApiKeyId || "-";
   const ack = state.lastRegisterStatus || "unknown";
   const source = state.bindingSource || "unknown";
   const ackError = state.lastRegisterError ? `, register_error=${state.lastRegisterError}` : "";
   const last = state.lastError ? `, error=${state.lastError}` : "";
-  el.textContent = `Connection status: ${ws}, route=${route}, managed_key=${managed}, binding=${source}, register=${ack}${ackError}${last}`;
+  el.textContent = `Connection status: ${ws}, route=${route}, managed_key=${managed}, binding=${source}, register=${ack}, instance_id=${instance}, worker_session=${workerSession}${ackError}${last}`;
 }
 
 function refreshRuntimeStatus() {

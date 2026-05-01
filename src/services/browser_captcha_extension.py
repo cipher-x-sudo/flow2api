@@ -331,6 +331,7 @@ class ExtensionCaptchaService:
                         websocket,
                         {
                             "type": "register_ack",
+                            "worker_session_id": conn.worker_session_id,
                             "route_key": conn.route_key,
                             "client_label": conn.client_label,
                             "instance_id": conn.instance_id,

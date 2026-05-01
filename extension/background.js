@@ -13,6 +13,7 @@ const runtimeState = {
     wsStatus: "idle",
     routeKey: "",
     instanceId: "",
+    workerSessionId: "",
     managedApiKeyId: "",
     bindingSource: "",
     lastRegisterStatus: "never",
@@ -113,6 +114,7 @@ async function connectWS() {
     const instanceId = await getInstanceId();
     runtimeState.routeKey = settings.routeKey;
     runtimeState.instanceId = instanceId;
+    runtimeState.workerSessionId = "";
     runtimeState.managedApiKeyId = "";
     runtimeState.bindingSource = "";
     runtimeState.wsStatus = "connecting";
@@ -168,6 +170,8 @@ async function connectWS() {
             runtimeState.lastRegisterStatus = ackStatus;
             runtimeState.lastRegisterError = ackError;
             runtimeState.bindingSource = String(data.binding_source || "");
+            runtimeState.instanceId = String(data.instance_id || runtimeState.instanceId || "");
+            runtimeState.workerSessionId = String(data.worker_session_id || "");
             runtimeState.managedApiKeyId = String(data.managed_api_key_id || "");
             if (ackStatus === "error") {
                 runtimeState.wsStatus = "open_register_error";
