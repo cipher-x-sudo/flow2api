@@ -733,6 +733,7 @@ class Database:
                     ("dedicated_extension_enabled", "BOOLEAN DEFAULT 0"),
                     ("dedicated_extension_captcha_timeout_seconds", "INTEGER DEFAULT 25"),
                     ("dedicated_extension_st_refresh_timeout_seconds", "INTEGER DEFAULT 45"),
+                    ("extension_fallback_to_managed_on_dedicated_failure", "BOOLEAN DEFAULT 0"),
                 ]
 
                 for col_name, col_type in captcha_columns_to_add:
@@ -2561,6 +2562,9 @@ class Database:
             config.set_dedicated_extension_st_refresh_timeout_seconds(
                 int(getattr(captcha_config, "dedicated_extension_st_refresh_timeout_seconds", 45) or 45)
             )
+            config.set_extension_fallback_to_managed_on_dedicated_failure(
+                bool(getattr(captcha_config, "extension_fallback_to_managed_on_dedicated_failure", False))
+            )
 
     # Cache config operations
     async def get_cache_config(self) -> CacheConfig:
@@ -2715,6 +2719,7 @@ class Database:
         dedicated_extension_enabled: bool = None,
         dedicated_extension_captcha_timeout_seconds: int = None,
         dedicated_extension_st_refresh_timeout_seconds: int = None,
+        extension_fallback_to_managed_on_dedicated_failure: bool = None,
     ):
         """Update captcha configuration"""
         async with self._connect(write=True) as db:
@@ -2860,6 +2865,13 @@ class Database:
                 new_dedicated_extension_st_refresh_timeout = max(
                     10, min(300, int(new_dedicated_extension_st_refresh_timeout))
                 )
+                new_extension_fallback_to_managed_on_dedicated_failure = (
+                    bool(extension_fallback_to_managed_on_dedicated_failure)
+                    if extension_fallback_to_managed_on_dedicated_failure is not None
+                    else bool(
+                        current.get("extension_fallback_to_managed_on_dedicated_failure", False)
+                    )
+                )
                 new_session_refresh_warmup_urls = (
                     str(new_session_refresh_warmup_urls or "").strip()
                     or "https://labs.google/fx/tools/flow,https://labs.google/fx"
@@ -2888,6 +2900,7 @@ class Database:
                         dedicated_extension_enabled = ?,
                         dedicated_extension_captcha_timeout_seconds = ?,
                         dedicated_extension_st_refresh_timeout_seconds = ?,
+                        extension_fallback_to_managed_on_dedicated_failure = ?,
                         updated_at = CURRENT_TIMESTAMP
                     WHERE id = 1
                 """, (new_method, new_yes_key, new_yes_url, new_cap_key, new_cap_url,
@@ -2907,7 +2920,8 @@ class Database:
                       new_extension_queue_wait_timeout,
                       bool(new_dedicated_extension_enabled),
                       new_dedicated_extension_captcha_timeout,
-                      new_dedicated_extension_st_refresh_timeout))
+                      new_dedicated_extension_st_refresh_timeout,
+                      bool(new_extension_fallback_to_managed_on_dedicated_failure)))
             else:
                 new_method = captcha_method if captcha_method is not None else "yescaptcha"
                 new_yes_key = yescaptcha_api_key if yescaptcha_api_key is not None else ""
@@ -3010,6 +3024,11 @@ class Database:
                         ),
                     ),
                 )
+                new_extension_fallback_to_managed_on_dedicated_failure = (
+                    bool(extension_fallback_to_managed_on_dedicated_failure)
+                    if extension_fallback_to_managed_on_dedicated_failure is not None
+                    else False
+                )
 
                 await db.execute("""
                     INSERT INTO captcha_config (id, captcha_method, yescaptcha_api_key, yescaptcha_base_url,
@@ -3030,8 +3049,9 @@ class Database:
                         session_refresh_scheduler_only_expiring_within_minutes,
                         extension_queue_wait_timeout_seconds,
                         dedicated_extension_enabled, dedicated_extension_captcha_timeout_seconds,
-                        dedicated_extension_st_refresh_timeout_seconds)
-                    VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        dedicated_extension_st_refresh_timeout_seconds,
+                        extension_fallback_to_managed_on_dedicated_failure)
+                    VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (new_method, new_yes_key, new_yes_url, new_cap_key, new_cap_url,
                       new_ez_key, new_ez_url, new_cs_key, new_cs_url,
                       (new_remote_base_url or "").strip(), (new_remote_api_key or "").strip(), new_remote_timeout,
@@ -3046,7 +3066,8 @@ class Database:
                       new_session_refresh_scheduler_interval_minutes, new_session_refresh_scheduler_batch_size,
                       new_session_refresh_scheduler_only_expiring_within_minutes,
                       new_extension_queue_wait_timeout, new_dedicated_extension_enabled,
-                      new_dedicated_extension_captcha_timeout, new_dedicated_extension_st_refresh_timeout))
+                      new_dedicated_extension_captcha_timeout, new_dedicated_extension_st_refresh_timeout,
+                      bool(new_extension_fallback_to_managed_on_dedicated_failure)))
 
             await db.commit()
 

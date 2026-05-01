@@ -225,6 +225,7 @@ class CaptchaConfig(BaseModel):
     session_refresh_scheduler_batch_size: int = 10
     session_refresh_scheduler_only_expiring_within_minutes: int = 60
     extension_queue_wait_timeout_seconds: int = 20
+    extension_fallback_to_managed_on_dedicated_failure: bool = False
     dedicated_extension_enabled: bool = False
     dedicated_extension_captcha_timeout_seconds: int = 25
     dedicated_extension_st_refresh_timeout_seconds: int = 45

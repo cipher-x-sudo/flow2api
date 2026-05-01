@@ -57,12 +57,16 @@ class FakeDB:
         self.tokens: dict[int, SimpleNamespace] = {}
         self.captcha_timeout = 3
         self.api_keys: set[int] = {1, 2, 3}
+        self.extension_fallback_to_managed_on_dedicated_failure = False
 
     async def get_token(self, token_id: int):
         return self.tokens.get(token_id)
 
     async def get_captcha_config(self):
-        return SimpleNamespace(extension_queue_wait_timeout_seconds=self.captcha_timeout)
+        return SimpleNamespace(
+            extension_queue_wait_timeout_seconds=self.captcha_timeout,
+            extension_fallback_to_managed_on_dedicated_failure=self.extension_fallback_to_managed_on_dedicated_failure,
+        )
 
     async def get_extension_worker_binding_for_route_key(self, route_key: str):
         if route_key in self.bindings:
@@ -125,6 +129,59 @@ def test_extension_get_token_isolated_by_managed_api_key():
                 token_id=100,
                 managed_api_key_id=2,
             )
+
+    asyncio.run(_run())
+
+
+def test_extension_get_token_fallback_after_dedicated_failure():
+    async def _run():
+        ExtensionCaptchaService._instance = None
+        db = FakeDB()
+        db.extension_fallback_to_managed_on_dedicated_failure = True
+        db.captcha_timeout = 3
+        db.tokens[100] = SimpleNamespace(id=100, extension_route_key="rk1")
+        db.bindings["rk1"] = 1
+        db.bindings["rk2"] = 1
+        service = await ExtensionCaptchaService.get_instance(db=db)
+
+        ws_d = FakeWebSocket({"route_key": "rk1", "managed_api_key_id": "1"})
+        await service.connect(ws_d, authenticated_worker={"id": 1, "token_id": 100})
+        ws_u = FakeWebSocket({"route_key": "rk2", "managed_api_key_id": "1"})
+        await service.connect(ws_u, authenticated_managed_api_key_id=1)
+
+        token_task = asyncio.create_task(
+            service.get_token(
+                project_id="p1",
+                action="IMAGE_GENERATION",
+                timeout=2,
+                token_id=100,
+                managed_api_key_id=1,
+            )
+        )
+
+        for _ in range(50):
+            if ws_d.sent_payloads:
+                break
+            await asyncio.sleep(0.05)
+        assert ws_d.sent_payloads
+        req1 = ws_d.sent_payloads[-1]["req_id"]
+        await service.handle_message(
+            ws_d,
+            json.dumps({"req_id": req1, "status": "error", "error": "dedicated_failed"}),
+        )
+
+        for _ in range(50):
+            if ws_u.sent_payloads:
+                break
+            await asyncio.sleep(0.05)
+        assert ws_u.sent_payloads
+        req2 = ws_u.sent_payloads[-1]["req_id"]
+        await service.handle_message(
+            ws_u,
+            json.dumps({"req_id": req2, "status": "success", "token": "tok-fallback"}),
+        )
+        token = await asyncio.wait_for(token_task, timeout=2)
+        assert token == "tok-fallback"
 
     asyncio.run(_run())
 

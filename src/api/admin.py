@@ -2413,6 +2413,9 @@ async def update_captcha_config(
     dedicated_extension_enabled = request.get("dedicated_extension_enabled")
     dedicated_extension_captcha_timeout_seconds = request.get("dedicated_extension_captcha_timeout_seconds")
     dedicated_extension_st_refresh_timeout_seconds = request.get("dedicated_extension_st_refresh_timeout_seconds")
+    extension_fallback_to_managed_on_dedicated_failure = request.get(
+        "extension_fallback_to_managed_on_dedicated_failure"
+    )
 
     # 验证浏览器打码页面 URL
     if browser_captcha_page_url is not None:
@@ -2513,6 +2516,7 @@ async def update_captcha_config(
         dedicated_extension_enabled=dedicated_extension_enabled,
         dedicated_extension_captcha_timeout_seconds=dedicated_extension_captcha_timeout_seconds,
         dedicated_extension_st_refresh_timeout_seconds=dedicated_extension_st_refresh_timeout_seconds,
+        extension_fallback_to_managed_on_dedicated_failure=extension_fallback_to_managed_on_dedicated_failure,
     )
 
     # 🔥 Hot reload: sync database config to memory
@@ -2618,6 +2622,9 @@ async def get_captcha_config(token: str = Depends(verify_admin_token)):
         ),
         "extension_queue_wait_timeout_seconds": int(
             getattr(captcha_config, "extension_queue_wait_timeout_seconds", 20) or 20
+        ),
+        "extension_fallback_to_managed_on_dedicated_failure": bool(
+            getattr(captcha_config, "extension_fallback_to_managed_on_dedicated_failure", False)
         ),
     }
 

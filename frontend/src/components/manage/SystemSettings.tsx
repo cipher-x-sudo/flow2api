@@ -54,6 +54,7 @@ type CaptchaForm = {
   session_refresh_scheduler_batch_size: number
   session_refresh_scheduler_only_expiring_within_minutes: number
   extension_queue_wait_timeout_seconds: number
+  extension_fallback_to_managed_on_dedicated_failure: boolean
   personal_proxy_enabled: boolean
   personal_proxy_url: string
 }
@@ -93,6 +94,7 @@ const defaultCaptcha: CaptchaForm = {
   session_refresh_scheduler_batch_size: 10,
   session_refresh_scheduler_only_expiring_within_minutes: 60,
   extension_queue_wait_timeout_seconds: 20,
+  extension_fallback_to_managed_on_dedicated_failure: false,
   personal_proxy_enabled: false,
   personal_proxy_url: "",
 }
@@ -256,6 +258,7 @@ export function SystemSettings({ active }: { active: boolean }) {
           raw.session_refresh_scheduler_only_expiring_within_minutes ?? 60
         ),
         extension_queue_wait_timeout_seconds: Number(raw.extension_queue_wait_timeout_seconds ?? 20),
+        extension_fallback_to_managed_on_dedicated_failure: !!raw.extension_fallback_to_managed_on_dedicated_failure,
         personal_proxy_enabled: !!raw.browser_proxy_enabled,
         personal_proxy_url: String(raw.browser_proxy_url ?? ""),
       }))
@@ -548,6 +551,8 @@ export function SystemSettings({ active }: { active: boolean }) {
           session_refresh_scheduler_only_expiring_within_minutes:
             captcha.session_refresh_scheduler_only_expiring_within_minutes,
           extension_queue_wait_timeout_seconds: captcha.extension_queue_wait_timeout_seconds,
+          extension_fallback_to_managed_on_dedicated_failure:
+            captcha.extension_fallback_to_managed_on_dedicated_failure,
         }),
       })
       if (!r) return
@@ -930,6 +935,20 @@ export function SystemSettings({ active }: { active: boolean }) {
                 Managed-key requests wait in their own queue up to this timeout. If no matching worker is online for
                 that key/route, the request fails (no gateway fallback).
               </p>
+            </div>
+          ) : null}
+          {m === "extension" ? (
+            <div className="flex items-center gap-2">
+              <Switch
+                checked={captcha.extension_fallback_to_managed_on_dedicated_failure}
+                onCheckedChange={(v) =>
+                  setCaptcha((c) => ({ ...c, extension_fallback_to_managed_on_dedicated_failure: v }))
+                }
+              />
+              <Label>
+                After dedicated worker failure, retry reCAPTCHA on managed-key end-user extension (same request).
+                Does not apply to session-token refresh.
+              </Label>
             </div>
           ) : null}
 

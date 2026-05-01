@@ -796,6 +796,17 @@ class Config:
             self._config["captcha"] = {}
         self._config["captcha"]["dedicated_extension_st_refresh_timeout_seconds"] = max(10, min(300, int(seconds)))
 
+    @property
+    def extension_fallback_to_managed_on_dedicated_failure(self) -> bool:
+        return bool(
+            self._config.get("captcha", {}).get("extension_fallback_to_managed_on_dedicated_failure", False)
+        )
+
+    def set_extension_fallback_to_managed_on_dedicated_failure(self, enabled: bool):
+        if "captcha" not in self._config:
+            self._config["captcha"] = {}
+        self._config["captcha"]["extension_fallback_to_managed_on_dedicated_failure"] = bool(enabled)
+
 
 # Global config instance
 config = Config()
