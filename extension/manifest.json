@@ -3,6 +3,11 @@
   "name": "Flow2API Captcha Worker",
   "version": "1.0.1",
   "description": "Generate Google Labs reCAPTCHA Enterprise tokens for Flow2API.",
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
   "permissions": [
     "storage",
     "tabs",
