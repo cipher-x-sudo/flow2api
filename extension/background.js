@@ -637,24 +637,23 @@ async function reopenWorkerLabsPageAfterUpstreamRejection(settings, reason) {
     const tabId = runtimeState.workerTabId;
     if (tabId != null) {
         try {
-            await new Promise((resolve, reject) => {
-                chrome.tabs.update(tabId, { url: pageUrl }, () => {
-                    if (chrome.runtime.lastError) {
-                        reject(new Error(chrome.runtime.lastError.message || "tabs_update_failed"));
-                    } else {
-                        resolve();
-                    }
-                });
-            });
-            await waitForTabReady(tabId);
-            await sleep(800);
-            pushEvent("worker_page_reopened", `Navigated worker tab to Labs (${reason || "upstream_captcha"})`);
-            return;
+            await chrome.tabs.remove(tabId);
+        } catch (_) {}
+        runtimeState.workerTabId = null;
+        persistWorkerTabId(null);
+        try {
+            const newTab = await chrome.tabs.create({ url: pageUrl, active: false });
+            if (newTab && newTab.id) {
+                runtimeState.workerTabId = newTab.id;
+                persistWorkerTabId(newTab.id);
+                await waitForTabReady(newTab.id);
+                await sleep(1200);
+                pushEvent("worker_tab_recycled", `Worker tab replaced after upstream captcha (${reason || "upstream_captcha"})`);
+            }
         } catch (e) {
-            runtimeState.workerTabId = null;
-            persistWorkerTabId(null);
-            pushEvent("worker_tab_nav_failed", String(e && e.message ? e.message : e), "warn");
+            pushEvent("worker_page_open_failed", String(e && e.message ? e.message : e), "error");
         }
+        return;
     }
     try {
         const tab = await chrome.tabs.create({ url: pageUrl, active: false });
@@ -727,6 +726,9 @@ async function ensurePersistentWorkerTab(settings) {
                 });
                 await waitForTabReady(tabId);
                 await sleep(1200);
+            } else {
+                // Same Labs/Flow surface as worker URL: no navigation — wait for load if needed, skip settle delay.
+                await waitForTabReady(tabId);
             }
             return tabId;
         }

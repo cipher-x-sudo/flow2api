@@ -420,6 +420,8 @@
       <p class="hint" style="margin-top:0;">
         Optional: keep one background tab for reCAPTCHA instead of opening a new tab every job.
         Worker page URL must stay on <code>https://labs.google/...</code> so the extension can script the page.
+        With a persistent tab, each successful captcha only runs injected script on that tab (no full reload).
+        Auto-recycle closes the tab and opens a new one only after a failed local solve or upstream captcha rejection (when enabled).
       </p>
       <label for="workerPageUrl">Worker page URL</label>
       <input id="workerPageUrl" type="text" placeholder="https://labs.google/fx/tools/flow">
