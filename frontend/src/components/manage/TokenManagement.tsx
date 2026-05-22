@@ -63,12 +63,6 @@ function formatExpiryDisplay(atExpires: string | null | undefined): ReactNode {
   )
 }
 
-function asDedicatedWorkerBool(v: unknown, defaultTrue = true): boolean {
-  if (v === undefined || v === null) return defaultTrue
-  if (v === false || v === 0 || v === "0") return false
-  return true
-}
-
 function accountTierBadge(tier: string | null | undefined) {
   if (!tier || tier === "PAYGATE_TIER_NOT_PAID")
     return <span className="inline-flex rounded px-2 py-0.5 text-xs bg-muted text-muted-foreground">Free</span>
@@ -137,12 +131,7 @@ export function TokenManagement() {
   const [workerKeyList, setWorkerKeyList] = useState<DedicatedExtensionWorkerRow[]>([])
   const [workerKeyListLoading, setWorkerKeyListLoading] = useState(false)
   const [workerKeyDeletingId, setWorkerKeyDeletingId] = useState<number | null>(null)
-  const [workerKeyAllowCaptcha, setWorkerKeyAllowCaptcha] = useState(true)
-  const [workerKeyAllowSessionRefresh, setWorkerKeyAllowSessionRefresh] = useState(true)
-  const [workerKeyAllowGeneration, setWorkerKeyAllowGeneration] = useState(false)
-  const [workerRowDrafts, setWorkerRowDrafts] = useState<
-    Record<number, { label: string; allow_captcha: boolean; allow_session_refresh: boolean; allow_generation: boolean }>
-  >({})
+  const [workerRowDrafts, setWorkerRowDrafts] = useState<Record<number, { label: string }>>({})
   const [workerRowSavingId, setWorkerRowSavingId] = useState<number | null>(null)
   const [workerKeyKillAllBusy, setWorkerKeyKillAllBusy] = useState(false)
   const workerRowDraftsRef = useRef(workerRowDrafts)
@@ -484,13 +473,10 @@ export function TokenManagement() {
       }
       const filtered = data.workers.filter((w) => w.token_id === tid)
       setWorkerKeyList(filtered)
-      const drafts: Record<number, { label: string; allow_captcha: boolean; allow_session_refresh: boolean; allow_generation: boolean }> = {}
+      const drafts: Record<number, { label: string }> = {}
       for (const w of filtered) {
         drafts[w.id] = {
           label: (w.label ?? "").trim(),
-          allow_captcha: asDedicatedWorkerBool(w.allow_captcha),
-          allow_session_refresh: asDedicatedWorkerBool(w.allow_session_refresh),
-          allow_generation: asDedicatedWorkerBool(w.allow_generation, false),
         }
       }
       setWorkerRowDrafts(drafts)
@@ -504,12 +490,9 @@ export function TokenManagement() {
   const openWorkerKeyDialog = (t: TokenRow) => {
     setWorkerKeyToken(t)
     const baseLabel = (t.remark || t.email || `token-${t.id}`).trim()
-    setWorkerKeyLabel(baseLabel ? `Worker: ${baseLabel}` : `Worker: ${t.id}`)
+    setWorkerKeyLabel(baseLabel ? `Refresh worker: ${baseLabel}` : `Refresh worker: ${t.id}`)
     setWorkerKeyRouteKey((t.extension_route_key || "").trim())
     setWorkerKeyGenerated(null)
-    setWorkerKeyAllowCaptcha(true)
-    setWorkerKeyAllowSessionRefresh(true)
-    setWorkerKeyAllowGeneration(false)
     setWorkerKeyOpen(true)
     void loadDedicatedWorkersForToken(t.id)
   }
@@ -544,7 +527,7 @@ export function TokenManagement() {
         { method: "DELETE" }
       )
       if (ok && data?.success) {
-        toast.success("Worker key deleted")
+        toast.success("Refresh worker key deleted")
         await loadDedicatedWorkersForToken(workerKeyToken.id)
       } else {
         const d = data as DeleteDedicatedWorkerResponse & { detail?: unknown }
@@ -576,10 +559,6 @@ export function TokenManagement() {
     if (!token || !workerKeyToken) return
     const draft = workerRowDraftsRef.current[workerId]
     if (!draft) return
-    if (!draft.allow_captcha && !draft.allow_session_refresh && !draft.allow_generation) {
-      toast.error("At least one of Captcha, Refresh AT/ST, or Extension generation must stay enabled")
-      return
-    }
     const labelStr = typeof draft.label === "string" ? draft.label.trim() : String(draft.label ?? "").trim()
     setWorkerRowSavingId(workerId)
     try {
@@ -589,15 +568,12 @@ export function TokenManagement() {
         {
           method: "PATCH",
           body: JSON.stringify({
-            label: labelStr || `Worker: ${workerId}`,
-            allow_captcha: !!draft.allow_captcha,
-            allow_session_refresh: !!draft.allow_session_refresh,
-            allow_generation: !!draft.allow_generation,
+            label: labelStr || `Refresh worker: ${workerId}`,
           }),
         }
       )
       if (ok && data?.success) {
-        toast.success("Worker updated — reconnect extension to apply capability changes.")
+        toast.success("Refresh worker updated")
         await loadDedicatedWorkersForToken(workerKeyToken.id)
       } else {
         let msg = `Failed (${status})`
@@ -672,10 +648,6 @@ export function TokenManagement() {
 
   const generateDedicatedWorkerKey = async () => {
     if (!token || !workerKeyToken) return
-    if (!workerKeyAllowCaptcha && !workerKeyAllowSessionRefresh && !workerKeyAllowGeneration) {
-      toast.error("Enable at least one of Captcha, Refresh AT/ST, or Extension generation")
-      return
-    }
     setWorkerKeySaving(true)
     setWorkerKeyGenerated(null)
     try {
@@ -683,15 +655,9 @@ export function TokenManagement() {
         label: string
         token_id: number
         route_key?: string | null
-        allow_captcha: boolean
-        allow_session_refresh: boolean
-        allow_generation: boolean
       } = {
-        label: workerKeyLabel.trim() || `Worker: ${workerKeyToken.id}`,
+        label: workerKeyLabel.trim() || `Refresh worker: ${workerKeyToken.id}`,
         token_id: workerKeyToken.id,
-        allow_captcha: workerKeyAllowCaptcha,
-        allow_session_refresh: workerKeyAllowSessionRefresh,
-        allow_generation: workerKeyAllowGeneration,
       }
       const rk = workerKeyRouteKey.trim()
       if (rk) body.route_key = rk
@@ -701,7 +667,7 @@ export function TokenManagement() {
       })
       if (ok && data?.success && data.worker_registration_key) {
         setWorkerKeyGenerated(data.worker_registration_key)
-        toast.success("Registration key created — copy it now; it will not be shown again.")
+        toast.success("Refresh worker key created — copy it now; it will not be shown again.")
         await loadDedicatedWorkersForToken(workerKeyToken.id)
       } else {
         const msg =
@@ -898,10 +864,10 @@ export function TokenManagement() {
                               size="sm"
                               className="h-7 px-2 text-xs"
                               onClick={() => openWorkerKeyDialog(t)}
-                              title="Create Chrome extension worker registration key for this account"
+                              title="Create Chrome extension refresh worker key for this account"
                             >
                               <KeyRound className="h-3 w-3 mr-1" />
-                              Worker key
+                              Refresh key
                             </Button>
                             <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => openEdit(t)}>
                               <Pencil className="h-3 w-3 mr-1" />
@@ -1106,17 +1072,17 @@ export function TokenManagement() {
       <Dialog open={workerKeyOpen} onOpenChange={closeWorkerKeyDialog}>
         <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>Extension worker key</DialogTitle>
+            <DialogTitle>Extension refresh worker key</DialogTitle>
             <DialogDescription>
               For token #{workerKeyToken?.id}
               {workerKeyToken?.email ? ` (${workerKeyToken.email})` : ""}. Paste the generated key into the Chrome extension
-              <strong className="font-medium"> Worker</strong> tab. The full secret is shown only once — store it safely. The list
+              <strong className="font-medium"> Refresh worker</strong> mode. The full secret is shown only once - store it safely. The list
               below shows the public key id; when the server has stored the registration secret (new keys), you can view and copy it here. Older keys only have the prefix until you generate a replacement.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
             <div>
-              <Label>Worker label</Label>
+              <Label>Refresh worker label</Label>
               <Input className="mt-1" value={workerKeyLabel} onChange={(e) => setWorkerKeyLabel(e.target.value)} placeholder="e.g. office PC" />
             </div>
             <div>
@@ -1128,40 +1094,9 @@ export function TokenManagement() {
                 placeholder="Leave empty if you only use dedicated worker binding"
               />
             </div>
-            <div className="rounded-md border bg-muted/40 p-3 space-y-2">
-              <p className="text-sm font-medium text-foreground">Capabilities for new key</p>
-              <label className="flex items-center gap-2 text-sm cursor-pointer">
-                <input
-                  type="checkbox"
-                  className="h-4 w-4 rounded border border-input"
-                  checked={workerKeyAllowCaptcha}
-                  onChange={(e) => setWorkerKeyAllowCaptcha(e.target.checked)}
-                />
-                <span>Captcha (reCAPTCHA / get_token)</span>
-              </label>
-              <label className="flex items-center gap-2 text-sm cursor-pointer">
-                <input
-                  type="checkbox"
-                  className="h-4 w-4 rounded border border-input"
-                  checked={workerKeyAllowSessionRefresh}
-                  onChange={(e) => setWorkerKeyAllowSessionRefresh(e.target.checked)}
-                />
-                <span>Refresh AT/ST (session token via extension)</span>
-              </label>
-              <label className="flex items-center gap-2 text-sm cursor-pointer">
-                <input
-                  type="checkbox"
-                  className="h-4 w-4 rounded border border-input"
-                  checked={workerKeyAllowGeneration}
-                  onChange={(e) => setWorkerKeyAllowGeneration(e.target.checked)}
-                />
-                <span>Extension generation (Flow HTTP in this browser)</span>
-              </label>
-              <p className="text-xs text-muted-foreground">At least one must stay checked.</p>
-            </div>
             <div className="rounded-md border bg-muted/40 p-3 text-sm text-muted-foreground">
               <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
-                <p className="font-medium text-foreground">Workers already linked to this token</p>
+                <p className="font-medium text-foreground">Refresh workers linked to this token</p>
                 <Button
                   type="button"
                   size="sm"
@@ -1174,7 +1109,7 @@ export function TokenManagement() {
                     workerRowSavingId !== null ||
                     workerKeyDeletingId !== null
                   }
-                  title="Disconnect all extension clients using dedicated registration keys for this token"
+                  title="Disconnect all extension clients using refresh worker keys for this token"
                   onClick={() => void killAllDedicatedWorkerSessions()}
                 >
                   {workerKeyKillAllBusy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Unplug className="h-3 w-3" />}
@@ -1211,7 +1146,7 @@ export function TokenManagement() {
                               {w.last_seen_at ? ` · last seen ${w.last_seen_at}` : ""}
                             </p>
                             <div className="pt-2 space-y-1">
-                              <Label className="text-[11px] text-muted-foreground">Registration key (full secret)</Label>
+                              <Label className="text-[11px] text-muted-foreground">Refresh worker key (full secret)</Label>
                               <div className="flex gap-2">
                                 <Textarea
                                   readOnly
@@ -1262,50 +1197,6 @@ export function TokenManagement() {
                             </Button>
                           </div>
                         </div>
-                        <div className="flex flex-wrap gap-4 pt-1">
-                          <label className="flex items-center gap-2 text-xs cursor-pointer">
-                            <input
-                              type="checkbox"
-                              className="h-3.5 w-3.5 rounded border border-input"
-                              checked={draft.allow_captcha}
-                              onChange={(e) =>
-                                setWorkerRowDrafts((prev) => ({
-                                  ...prev,
-                                  [w.id]: { ...draft, allow_captcha: e.target.checked },
-                                }))
-                              }
-                            />
-                            Captcha
-                          </label>
-                          <label className="flex items-center gap-2 text-xs cursor-pointer">
-                            <input
-                              type="checkbox"
-                              className="h-3.5 w-3.5 rounded border border-input"
-                              checked={draft.allow_session_refresh}
-                              onChange={(e) =>
-                                setWorkerRowDrafts((prev) => ({
-                                  ...prev,
-                                  [w.id]: { ...draft, allow_session_refresh: e.target.checked },
-                                }))
-                              }
-                            />
-                            Refresh AT/ST
-                          </label>
-                          <label className="flex items-center gap-2 text-xs cursor-pointer">
-                            <input
-                              type="checkbox"
-                              className="h-3.5 w-3.5 rounded border border-input"
-                              checked={draft.allow_generation}
-                              onChange={(e) =>
-                                setWorkerRowDrafts((prev) => ({
-                                  ...prev,
-                                  [w.id]: { ...draft, allow_generation: e.target.checked },
-                                }))
-                              }
-                            />
-                            Generation
-                          </label>
-                        </div>
                       </li>
                     )
                   })}
@@ -1314,7 +1205,7 @@ export function TokenManagement() {
             </div>
             {workerKeyGenerated ? (
               <div className="space-y-2">
-                <Label>Worker registration key (copy now)</Label>
+                <Label>Refresh worker key (copy now)</Label>
                 <div className="flex gap-2">
                   <Textarea readOnly className="font-mono text-xs min-h-[72px]" value={workerKeyGenerated} />
                   <Button type="button" variant="outline" size="icon" className="shrink-0" onClick={() => void copyWorkerRegistrationKey()} title="Copy">
@@ -1329,7 +1220,7 @@ export function TokenManagement() {
               Refresh list
             </Button>
             <Button type="button" onClick={() => void generateDedicatedWorkerKey()} disabled={workerKeySaving || !workerKeyToken}>
-              {workerKeySaving ? <Loader2 className="h-4 w-4 animate-spin" /> : workerKeyGenerated ? "Generate another key" : "Generate registration key"}
+              {workerKeySaving ? <Loader2 className="h-4 w-4 animate-spin" /> : workerKeyGenerated ? "Generate another key" : "Generate refresh key"}
             </Button>
             <Button variant="outline" onClick={() => closeWorkerKeyDialog(false)}>
               Close

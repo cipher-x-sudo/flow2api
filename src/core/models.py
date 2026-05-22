@@ -337,6 +337,22 @@ class DedicatedExtensionWorker(BaseModel):
     updated_at: Optional[datetime] = None
 
 
+class CaptchaWorkerKey(BaseModel):
+    """General captcha worker key for the shared reCAPTCHA worker pool."""
+
+    id: Optional[int] = None
+    key_prefix: str
+    key_hash: str
+    label: str = ""
+    key_plaintext: Optional[str] = None
+    is_active: bool = True
+    last_instance_id: Optional[str] = None
+    last_seen_at: Optional[datetime] = None
+    last_error: Optional[str] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+
 # OpenAI Compatible Request Models
 class ChatMessage(BaseModel):
     """Chat message"""

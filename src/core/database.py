@@ -587,6 +587,24 @@ class Database:
                     )
                 """)
 
+            if not await self._table_exists(db, "captcha_worker_keys"):
+                print("  âœ“ Creating missing table: captcha_worker_keys")
+                await db.execute("""
+                    CREATE TABLE captcha_worker_keys (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        key_prefix TEXT NOT NULL UNIQUE,
+                        key_hash TEXT NOT NULL UNIQUE,
+                        label TEXT DEFAULT '',
+                        key_plaintext TEXT,
+                        is_active BOOLEAN DEFAULT 1,
+                        last_instance_id TEXT,
+                        last_seen_at TIMESTAMP,
+                        last_error TEXT,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+
             if not await self._table_exists(db, "api_clients"):
                 print("  ✓ Creating missing table: api_clients")
                 await db.execute("""
@@ -965,6 +983,7 @@ class Database:
             await db.execute("CREATE INDEX IF NOT EXISTS idx_cache_files_api_key_project ON cache_files(api_key_id, flow_project_id)")
             await db.execute("CREATE INDEX IF NOT EXISTS idx_extension_worker_bindings_api_key_id ON extension_worker_bindings(api_key_id)")
             await db.execute("CREATE INDEX IF NOT EXISTS idx_dedicated_extension_workers_token_id ON dedicated_extension_workers(token_id)")
+            await db.execute("CREATE INDEX IF NOT EXISTS idx_captcha_worker_keys_active ON captcha_worker_keys(is_active)")
 
             await db.commit()
             print("Database migration check completed.")
@@ -1356,6 +1375,21 @@ class Database:
                 )
             """)
             await db.execute("""
+                CREATE TABLE IF NOT EXISTS captcha_worker_keys (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    key_prefix TEXT NOT NULL UNIQUE,
+                    key_hash TEXT NOT NULL UNIQUE,
+                    label TEXT DEFAULT '',
+                    key_plaintext TEXT,
+                    is_active BOOLEAN DEFAULT 1,
+                    last_instance_id TEXT,
+                    last_seen_at TIMESTAMP,
+                    last_error TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            await db.execute("""
                 CREATE TABLE IF NOT EXISTS api_key_rate_limits (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     api_key_id INTEGER NOT NULL,
@@ -1402,6 +1436,7 @@ class Database:
             await db.execute("CREATE INDEX IF NOT EXISTS idx_api_key_rl_key_endpoint ON api_key_rate_limits(api_key_id, endpoint)")
             await db.execute("CREATE INDEX IF NOT EXISTS idx_api_key_audit_created_at ON api_key_audit_logs(created_at DESC)")
             await db.execute("CREATE INDEX IF NOT EXISTS idx_dedicated_extension_workers_token_id ON dedicated_extension_workers(token_id)")
+            await db.execute("CREATE INDEX IF NOT EXISTS idx_captcha_worker_keys_active ON captcha_worker_keys(is_active)")
 
             # Migrate request_logs table if needed
             await self._migrate_request_logs(db)
@@ -4623,6 +4658,110 @@ class Database:
                 FROM extension_worker_bindings b
                 LEFT JOIN api_keys k ON k.id = b.api_key_id
                 ORDER BY b.updated_at DESC, b.route_key ASC
+                """
+            )
+            rows = await cursor.fetchall()
+            return [dict(row) for row in rows]
+
+    async def get_captcha_worker_key_by_hash(self, key_hash: str) -> Optional[Dict[str, Any]]:
+        normalized = (key_hash or "").strip()
+        if not normalized:
+            return None
+        async with self._connect() as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                """
+                SELECT *
+                FROM captcha_worker_keys
+                WHERE key_hash = ?
+                LIMIT 1
+                """,
+                (normalized,),
+            )
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+
+    async def get_captcha_worker_key(self, key_id: int) -> Optional[Dict[str, Any]]:
+        async with self._connect() as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                "SELECT * FROM captcha_worker_keys WHERE id = ?",
+                (int(key_id),),
+            )
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+
+    async def create_captcha_worker_key(
+        self,
+        *,
+        key_prefix: str,
+        key_hash: str,
+        label: str = "",
+        key_plaintext: Optional[str] = None,
+    ) -> int:
+        async with self._connect(write=True) as db:
+            cursor = await db.execute(
+                """
+                INSERT INTO captcha_worker_keys (key_prefix, key_hash, label, key_plaintext)
+                VALUES (?, ?, ?, ?)
+                """,
+                (
+                    (key_prefix or "").strip(),
+                    (key_hash or "").strip(),
+                    (label or "").strip(),
+                    (key_plaintext or "").strip() or None,
+                ),
+            )
+            await db.commit()
+            return int(cursor.lastrowid)
+
+    async def update_captcha_worker_key(
+        self,
+        key_id: int,
+        *,
+        label: Any = _DEDICATED_WORKER_UPDATE_OMIT,
+        is_active: Any = _DEDICATED_WORKER_UPDATE_OMIT,
+        last_instance_id: Optional[str] = None,
+        last_error: Optional[str] = None,
+        mark_seen: bool = False,
+    ) -> None:
+        updates: list[str] = ["updated_at = CURRENT_TIMESTAMP"]
+        values: list[Any] = []
+        if label is not _DEDICATED_WORKER_UPDATE_OMIT:
+            updates.append("label = ?")
+            values.append((label or "").strip())
+        if is_active is not _DEDICATED_WORKER_UPDATE_OMIT:
+            updates.append("is_active = ?")
+            values.append(1 if is_active else 0)
+        if last_instance_id is not None:
+            updates.append("last_instance_id = ?")
+            values.append((last_instance_id or "").strip() or None)
+        if last_error is not None:
+            updates.append("last_error = ?")
+            values.append((last_error or "").strip() or None)
+        if mark_seen:
+            updates.append("last_seen_at = CURRENT_TIMESTAMP")
+        values.append(int(key_id))
+        async with self._connect(write=True) as db:
+            await db.execute(
+                f"UPDATE captcha_worker_keys SET {', '.join(updates)} WHERE id = ?",
+                tuple(values),
+            )
+            await db.commit()
+
+    async def delete_captcha_worker_key(self, key_id: int) -> None:
+        async with self._connect(write=True) as db:
+            await db.execute("DELETE FROM captcha_worker_keys WHERE id = ?", (int(key_id),))
+            await db.commit()
+
+    async def list_captcha_worker_keys(self) -> List[Dict[str, Any]]:
+        async with self._connect() as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                """
+                SELECT *
+                FROM captcha_worker_keys
+                ORDER BY updated_at DESC, id DESC
                 """
             )
             rows = await cursor.fetchall()

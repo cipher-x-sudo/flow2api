@@ -8,6 +8,7 @@ const DEFAULT_SETTINGS = {
     serverUrl: "wss://flow-api.prismacreative.online/captcha_ws",
     connectionMode: "endUser",
     apiKey: "",
+    captchaWorkerAuthKey: "",
     workerAuthKey: "",
     routeKey: "",
     clientLabel: "",
@@ -47,6 +48,7 @@ const runtimeState = {
     instanceId: "",
     workerSessionId: "",
     managedApiKeyId: "",
+    captchaWorkerId: "",
     dedicatedWorkerId: "",
     dedicatedTokenId: "",
     bindingSource: "",
@@ -81,12 +83,14 @@ const runtimeState = {
 
 function inferConnectionMode(stored) {
     const explicit = String(stored.connectionMode || "").trim();
-    if (explicit === "worker" || explicit === "endUser") {
-        return explicit;
+    if (explicit === "captchaWorker" || explicit === "refreshWorker" || explicit === "worker" || explicit === "endUser") {
+        return explicit === "worker" ? "refreshWorker" : explicit;
     }
+    const cwk = String(stored.captchaWorkerAuthKey || "").trim();
     const wk = String(stored.workerAuthKey || "").trim();
     const ak = String(stored.apiKey || "").trim();
-    if (wk && !ak) return "worker";
+    if (cwk && !ak) return "captchaWorker";
+    if (wk && !ak) return "refreshWorker";
     return "endUser";
 }
 
@@ -364,6 +368,7 @@ function getSettings() {
                 serverUrl: normalizeWebSocketUrl((stored.serverUrl || DEFAULT_SETTINGS.serverUrl).trim()),
                 connectionMode,
                 apiKey: (stored.apiKey || "").trim(),
+                captchaWorkerAuthKey: (stored.captchaWorkerAuthKey || "").trim(),
                 workerAuthKey: (stored.workerAuthKey || "").trim(),
                 routeKey: (stored.routeKey || "").trim(),
                 clientLabel: (stored.clientLabel || "").trim(),
@@ -445,8 +450,8 @@ function stopWorkerSessionRefreshScheduler() {
 
 async function performSessionRefresh({ reason = "server_request", reqId = null } = {}) {
     const refreshReason = String(reason || "server_request");
-    if (runtimeState.connectionMode !== "worker") {
-        return { success: false, error: "worker_mode_required", reason: refreshReason };
+    if (runtimeState.connectionMode !== "refreshWorker") {
+        return { success: false, error: "refresh_worker_mode_required", reason: refreshReason };
     }
     if (runtimeState.sessionRefreshInFlight) {
         return { success: false, error: "session_refresh_busy", reason: refreshReason };
@@ -501,6 +506,7 @@ function resetRuntimeStatePartial() {
     runtimeState.routeKey = "";
     runtimeState.workerSessionId = "";
     runtimeState.managedApiKeyId = "";
+    runtimeState.captchaWorkerId = "";
     runtimeState.dedicatedWorkerId = "";
     runtimeState.dedicatedTokenId = "";
     runtimeState.bindingSource = "";
@@ -558,6 +564,7 @@ function resetExtensionToDefaults(done) {
                         serverUrl: DEFAULT_SETTINGS.serverUrl,
                         connectionMode: DEFAULT_SETTINGS.connectionMode,
                         apiKey: DEFAULT_SETTINGS.apiKey,
+                        captchaWorkerAuthKey: DEFAULT_SETTINGS.captchaWorkerAuthKey,
                         workerAuthKey: DEFAULT_SETTINGS.workerAuthKey,
                         routeKey: DEFAULT_SETTINGS.routeKey,
                         clientLabel: DEFAULT_SETTINGS.clientLabel,
@@ -1171,13 +1178,15 @@ async function connectWS() {
 
     const settings = await getSettings();
     const instanceId = await getInstanceId();
-    const mode = settings.connectionMode === "worker" ? "worker" : "endUser";
+    const rawMode = settings.connectionMode === "worker" ? "refreshWorker" : settings.connectionMode;
+    const mode = rawMode === "captchaWorker" || rawMode === "refreshWorker" ? rawMode : "endUser";
     stopWorkerSessionRefreshScheduler();
     runtimeState.connectionMode = mode;
     runtimeState.routeKey = mode === "endUser" ? settings.routeKey : "";
     runtimeState.instanceId = instanceId;
     runtimeState.workerSessionId = "";
     runtimeState.managedApiKeyId = "";
+    runtimeState.captchaWorkerId = "";
     runtimeState.bindingSource = "";
     runtimeState.wsStatus = "connecting";
     runtimeState.lastRegisterStatus = "pending";
@@ -1185,7 +1194,11 @@ async function connectWS() {
     runtimeState.lastError = "";
     pushEvent("connect_start", `Connecting to ${settings.serverUrl || DEFAULT_SETTINGS.serverUrl}`);
     const url = new URL(settings.serverUrl || DEFAULT_SETTINGS.serverUrl);
-    if (mode === "worker") {
+    if (mode === "captchaWorker") {
+        if (settings.captchaWorkerAuthKey) {
+            url.searchParams.set("captcha_worker_key", settings.captchaWorkerAuthKey);
+        }
+    } else if (mode === "refreshWorker") {
         if (settings.workerAuthKey) {
             url.searchParams.set("worker_key", settings.workerAuthKey);
         }
@@ -1243,6 +1256,7 @@ async function connectWS() {
             runtimeState.instanceId = String(data.instance_id || runtimeState.instanceId || "");
             runtimeState.workerSessionId = String(data.worker_session_id || "");
             runtimeState.managedApiKeyId = String(data.managed_api_key_id || "");
+            runtimeState.captchaWorkerId = String(data.captcha_worker_id || "");
             runtimeState.dedicatedWorkerId = String(data.dedicated_worker_id || "");
             runtimeState.dedicatedTokenId = String(data.dedicated_token_id || "");
             const ac = data.allow_captcha;
@@ -1266,6 +1280,8 @@ async function connectWS() {
                     data.route_key || "(empty)",
                     "managed_api_key_id=",
                     runtimeState.managedApiKeyId || "-",
+                    "captcha_worker_id=",
+                    runtimeState.captchaWorkerId || "-",
                     "binding_source=",
                     runtimeState.bindingSource || "-",
                     "allowCaptcha=",
@@ -1332,7 +1348,7 @@ async function connectWS() {
 }
 
 async function handleGetToken(data) {
-    if (runtimeState.connectionMode === "worker" && runtimeState.allowCaptcha === false) {
+    if (runtimeState.allowCaptcha === false) {
         if (ws && ws.readyState === WebSocket.OPEN && data.req_id) {
             ws.send(
                 JSON.stringify({
@@ -1409,7 +1425,7 @@ async function warmupLabsForSessionRefresh() {
 }
 
 async function handleRefreshSessionToken(data) {
-    if (runtimeState.connectionMode === "worker" && runtimeState.allowSessionRefresh === false) {
+    if (runtimeState.allowSessionRefresh === false) {
         if (ws && ws.readyState === WebSocket.OPEN && data && data.req_id) {
             ws.send(
                 JSON.stringify({
@@ -1440,6 +1456,7 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
         changes.serverUrl ||
         changes.clientLabel ||
         changes.apiKey ||
+        changes.captchaWorkerAuthKey ||
         changes.workerAuthKey ||
         changes.connectionMode
     ) {

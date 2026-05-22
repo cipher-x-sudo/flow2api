@@ -543,10 +543,11 @@
       </div>
 
       <h2>Authentication Mode</h2>
-      <p>Choose <strong>End user</strong> (managed API key) or <strong>Worker</strong> (dedicated registration key).</p>
+      <p>Choose <strong>End user</strong>, <strong>Captcha worker</strong>, or <strong>Refresh worker</strong>.</p>
       <div class="inner-tabs" role="tablist">
         <button type="button" class="inner-tab" id="tabEndUser" role="tab" aria-selected="true" aria-controls="panelEndUser">End User</button>
-        <button type="button" class="inner-tab" id="tabWorker" role="tab" aria-selected="false" aria-controls="panelWorker">Worker</button>
+        <button type="button" class="inner-tab" id="tabCaptchaWorker" role="tab" aria-selected="false" aria-controls="panelCaptchaWorker">Captcha Worker</button>
+        <button type="button" class="inner-tab" id="tabRefreshWorker" role="tab" aria-selected="false" aria-controls="panelRefreshWorker">Refresh Worker</button>
       </div>
 
       <div id="panelEndUser" class="tabpanel" role="tabpanel" aria-hidden="false">
@@ -564,10 +565,17 @@
         </div>
       </div>
 
-      <div id="panelWorker" class="tabpanel" role="tabpanel" aria-hidden="true">
+      <div id="panelCaptchaWorker" class="tabpanel" role="tabpanel" aria-hidden="true">
         <div class="form-group">
-          <label for="workerAuthKey">Worker Registration Key</label>
-          <input id="workerAuthKey" type="password" placeholder="Paste dedicated worker key here">
+          <label for="captchaWorkerAuthKey">Captcha Worker Key</label>
+          <input id="captchaWorkerAuthKey" type="password" placeholder="Paste captcha worker key here">
+        </div>
+      </div>
+
+      <div id="panelRefreshWorker" class="tabpanel" role="tabpanel" aria-hidden="true">
+        <div class="form-group">
+          <label for="workerAuthKey">Refresh Worker Key</label>
+          <input id="workerAuthKey" type="password" placeholder="Paste token-bound refresh worker key here">
         </div>
       </div>
 

@@ -2,6 +2,7 @@ const DEFAULT_SETTINGS = {
   serverUrl: "wss://flow-api.prismacreative.online/captcha_ws",
   connectionMode: "endUser",
   apiKey: "",
+  captchaWorkerAuthKey: "",
   workerAuthKey: "",
   routeKey: "",
   clientLabel: ""
@@ -15,6 +16,7 @@ const STORAGE_KEYS = {
   serverUrl: DEFAULT_SETTINGS.serverUrl,
   connectionMode: DEFAULT_SETTINGS.connectionMode,
   apiKey: "",
+  captchaWorkerAuthKey: "",
   workerAuthKey: "",
   routeKey: "",
   clientLabel: "",
@@ -50,11 +52,16 @@ function normalizeWorkerPageUrl(raw) {
 }
 
 function normalizeSettings(values) {
-  const mode = (values.connectionMode || "").trim() === "worker" ? "worker" : "endUser";
+  const rawMode = (values.connectionMode || "").trim();
+  const mode =
+    rawMode === "captchaWorker" || rawMode === "refreshWorker" || rawMode === "worker"
+      ? rawMode === "worker" ? "refreshWorker" : rawMode
+      : "endUser";
   return {
     serverUrl: normalizeWebSocketUrl((values.serverUrl || DEFAULT_SETTINGS.serverUrl).trim()),
     connectionMode: mode,
     apiKey: (values.apiKey || "").trim(),
+    captchaWorkerAuthKey: (values.captchaWorkerAuthKey || "").trim(),
     workerAuthKey: (values.workerAuthKey || "").trim(),
     routeKey: (values.routeKey || "").trim(),
     clientLabel: (values.clientLabel || "").trim(),
@@ -67,12 +74,14 @@ function normalizeSettings(values) {
 
 function inferConnectionMode(stored) {
   const explicit = (stored.connectionMode || "").trim();
-  if (explicit === "worker" || explicit === "endUser") {
-    return explicit;
+  if (explicit === "captchaWorker" || explicit === "refreshWorker" || explicit === "worker" || explicit === "endUser") {
+    return explicit === "worker" ? "refreshWorker" : explicit;
   }
+  const cwk = (stored.captchaWorkerAuthKey || "").trim();
   const wk = (stored.workerAuthKey || "").trim();
   const ak = (stored.apiKey || "").trim();
-  if (wk && !ak) return "worker";
+  if (cwk && !ak) return "captchaWorker";
+  if (wk && !ak) return "refreshWorker";
   return "endUser";
 }
 
@@ -120,16 +129,22 @@ function normalizeWebSocketUrl(raw) {
 }
 
 function getActiveMode() {
-  const endTab = $("tabEndUser");
-  return endTab && endTab.getAttribute("aria-selected") === "true" ? "endUser" : "worker";
+  if ($("tabCaptchaWorker") && $("tabCaptchaWorker").getAttribute("aria-selected") === "true") return "captchaWorker";
+  if ($("tabRefreshWorker") && $("tabRefreshWorker").getAttribute("aria-selected") === "true") return "refreshWorker";
+  return "endUser";
 }
 
 function setActiveMode(mode) {
-  const isEnd = mode === "endUser";
+  const normalized = mode === "worker" ? "refreshWorker" : mode;
+  const isEnd = normalized === "endUser";
+  const isCaptcha = normalized === "captchaWorker";
+  const isRefresh = normalized === "refreshWorker";
   $("tabEndUser").setAttribute("aria-selected", isEnd ? "true" : "false");
-  $("tabWorker").setAttribute("aria-selected", isEnd ? "false" : "true");
+  $("tabCaptchaWorker").setAttribute("aria-selected", isCaptcha ? "true" : "false");
+  $("tabRefreshWorker").setAttribute("aria-selected", isRefresh ? "true" : "false");
   $("panelEndUser").setAttribute("aria-hidden", isEnd ? "false" : "true");
-  $("panelWorker").setAttribute("aria-hidden", isEnd ? "true" : "false");
+  $("panelCaptchaWorker").setAttribute("aria-hidden", isCaptcha ? "false" : "true");
+  $("panelRefreshWorker").setAttribute("aria-hidden", isRefresh ? "false" : "true");
 }
 
 function loadSettings() {
@@ -153,6 +168,7 @@ function applyLoadedSettings(stored, inferredMode) {
   const settings = normalizeSettings({ ...stored, connectionMode: inferredMode });
   $("serverUrl").value = settings.serverUrl;
   $("apiKey").value = settings.apiKey;
+  $("captchaWorkerAuthKey").value = settings.captchaWorkerAuthKey;
   $("workerAuthKey").value = settings.workerAuthKey;
   $("routeKey").value = settings.routeKey;
   $("clientLabel").value = settings.clientLabel;
@@ -184,7 +200,6 @@ function saveSettings() {
       serverUrl,
       connectionMode: "endUser",
       apiKey,
-      workerAuthKey: "",
       clientLabel: ($("clientLabel").value || "").trim(),
       routeKey: ($("routeKey").value || "").trim()
     };
@@ -193,19 +208,48 @@ function saveSettings() {
         setStatus(`Save failed: ${chrome.runtime.lastError.message}`, true);
         return;
       }
-      setStatus("Saved connection (End user). Worker key cleared. Background will reconnect.");
+      setStatus("Saved connection (End user). Background will reconnect.");
     });
+    return;
+  }
+
+  if (mode === "captchaWorker") {
+    const captchaWorkerAuthKey = ($("captchaWorkerAuthKey").value || "").trim();
+    if (!captchaWorkerAuthKey) {
+      setStatus("Captcha worker key is required for Captcha worker mode.", true);
+      return;
+    }
+    chrome.storage.local.set(
+      {
+        serverUrl,
+        connectionMode: "captchaWorker",
+        captchaWorkerAuthKey,
+        apiKey: "",
+        clientLabel: "",
+        routeKey: ""
+      },
+      () => {
+        if (chrome.runtime.lastError) {
+          setStatus(`Save failed: ${chrome.runtime.lastError.message}`, true);
+          return;
+        }
+        setStatus("Saved connection (Captcha worker). Background will reconnect.");
+        $("apiKey").value = "";
+        $("clientLabel").value = "";
+        $("routeKey").value = "";
+      }
+    );
     return;
   }
 
   const workerAuthKey = ($("workerAuthKey").value || "").trim();
   if (!workerAuthKey) {
-    setStatus("Worker Registration Key is required for Worker mode.", true);
+    setStatus("Refresh worker key is required for Refresh worker mode.", true);
     return;
   }
   const payload = {
     serverUrl,
-    connectionMode: "worker",
+    connectionMode: "refreshWorker",
     workerAuthKey,
     apiKey: "",
     clientLabel: "",
@@ -216,7 +260,7 @@ function saveSettings() {
       setStatus(`Save failed: ${chrome.runtime.lastError.message}`, true);
       return;
     }
-    setStatus("Saved connection (Worker). API key and labels cleared. Background will reconnect.");
+    setStatus("Saved connection (Refresh worker). API key and labels cleared. Background will reconnect.");
     $("apiKey").value = "";
     $("clientLabel").value = "";
     $("routeKey").value = "";
@@ -413,6 +457,7 @@ function renderStatusCards(state) {
   const instance = state.instanceId || "-";
   const workerSession = state.workerSessionId || "-";
   const managed = state.managedApiKeyId || "-";
+  const captchaWorker = state.captchaWorkerId || "-";
   const dedicatedWorker = state.dedicatedWorkerId || "-";
   const dedicatedToken = state.dedicatedTokenId || "-";
   const ack = state.lastRegisterStatus || "unknown";
@@ -429,6 +474,7 @@ function renderStatusCards(state) {
     ["Register", ack, ack === "error"],
     ["Binding", source, false],
     ["Managed key", managed, false],
+    ["Captcha worker", captchaWorker, false],
     ["Dedicated worker", dedicatedWorker, false],
     ["Dedicated token", dedicatedToken, false],
     ["Allow generation", state.allowGeneration ? "yes" : "no", false],
@@ -627,7 +673,8 @@ function sendWorkerMessage(type, okMsg) {
 
 function wireAuthTabs() {
   $("tabEndUser").addEventListener("click", () => setActiveMode("endUser"));
-  $("tabWorker").addEventListener("click", () => setActiveMode("worker"));
+  $("tabCaptchaWorker").addEventListener("click", () => setActiveMode("captchaWorker"));
+  $("tabRefreshWorker").addEventListener("click", () => setActiveMode("refreshWorker"));
 }
 
 function wireMainTabs() {

@@ -118,6 +118,9 @@ type ExtensionWorkerRow = {
   managed_api_key_id: number | null
   binding_source: string
   connected_at: number
+  captcha_worker_id?: number | null
+  captcha_worker_key_label?: string | null
+  captcha_worker_key_prefix?: string | null
   dedicated_worker_id?: number | null
   dedicated_token_id?: number | null
   dedicated_worker_key_label?: string | null
@@ -747,9 +750,10 @@ export function SystemSettings({ active }: { active: boolean }) {
   const m = captcha.captcha_method
   const extensionModeActive = m === "extension"
   const supportsAtRefreshMode = ["extension", "browser", "personal", "remote_browser"].includes(m)
+  const captchaWorkers = extensionWorkers.filter((w) => w.captcha_worker_id != null)
   const endUserWorkers = extensionWorkers.filter((w) => w.managed_api_key_id !== null)
   const dedicatedWorkers = extensionWorkers.filter(
-    (w) => w.managed_api_key_id === null && (w.dedicated_worker_id != null || w.dedicated_token_id != null)
+    (w) => w.captcha_worker_id == null && w.managed_api_key_id === null && (w.dedicated_worker_id != null || w.dedicated_token_id != null)
   )
 
   return (
@@ -1501,6 +1505,39 @@ export function SystemSettings({ active }: { active: boolean }) {
               </p>
               <div className="space-y-3">
                 <div className="rounded-md border">
+                  <div className="px-3 py-2 text-xs font-medium border-b bg-muted/30">Captcha workers (shared pool)</div>
+                  <div className="grid grid-cols-6 gap-2 px-3 py-2 text-xs font-medium border-b">
+                    <span>Worker ID</span>
+                    <span>Key</span>
+                    <span>Label</span>
+                    <span>Source</span>
+                    <span>Connected at</span>
+                    <span>Action</span>
+                  </div>
+                  {captchaWorkers.map((w) => (
+                    <div key={w.worker_session_id} className="grid grid-cols-6 gap-2 px-3 py-2 text-xs border-b last:border-b-0 items-start">
+                      <span className="font-mono min-w-0 break-all whitespace-normal">{w.worker_session_id || "-"}</span>
+                      <span>{w.captcha_worker_key_prefix || w.captcha_worker_id || "-"}</span>
+                      <span className="min-w-0 break-words whitespace-normal">{w.captcha_worker_key_label || "-"}</span>
+                      <span className="min-w-0 break-words whitespace-normal">{w.binding_source || "-"}</span>
+                      <span>{w.connected_at ? new Date(w.connected_at * 1000).toLocaleTimeString() : "-"}</span>
+                      <span>
+                        <Button
+                          size="sm"
+                          variant="destructive"
+                          onClick={() => killExtensionWorker(w.worker_session_id)}
+                          disabled={busy}
+                        >
+                          Kill
+                        </Button>
+                      </span>
+                    </div>
+                  ))}
+                  {captchaWorkers.length === 0 ? (
+                    <div className="px-3 py-3 text-xs text-muted-foreground">No captcha workers</div>
+                  ) : null}
+                </div>
+                <div className="rounded-md border">
                   <div className="px-3 py-2 text-xs font-medium border-b bg-muted/30">End user workers (managed API key)</div>
                   <div className="grid grid-cols-7 gap-2 px-3 py-2 text-xs font-medium border-b">
                     <span>Worker ID</span>
@@ -1536,7 +1573,7 @@ export function SystemSettings({ active }: { active: boolean }) {
                   ) : null}
                 </div>
                 <div className="rounded-md border">
-                  <div className="px-3 py-2 text-xs font-medium border-b bg-muted/30">Worker mode (dedicated registration key)</div>
+                  <div className="px-3 py-2 text-xs font-medium border-b bg-muted/30">Refresh worker mode (token-bound key)</div>
                   <div className="grid grid-cols-10 gap-2 px-3 py-2 text-xs font-medium border-b">
                     <span>Worker ID</span>
                     <span>Dedicated worker</span>
@@ -1544,7 +1581,7 @@ export function SystemSettings({ active }: { active: boolean }) {
                     <span>Key name</span>
                     <span>Route key</span>
                     <span>Client label</span>
-                    <span>Gen</span>
+                    <span>Refresh</span>
                     <span>Source</span>
                     <span>Connected at</span>
                     <span>Action</span>
@@ -1561,7 +1598,7 @@ export function SystemSettings({ active }: { active: boolean }) {
                       </span>
                       <span className="font-mono min-w-0 break-all whitespace-normal">{w.route_key || "(empty)"}</span>
                       <span className="min-w-0 break-words whitespace-normal">{w.client_label || "-"}</span>
-                      <span>{w.allow_generation ? "yes" : "no"}</span>
+                      <span>{w.allow_session_refresh === false ? "no" : "yes"}</span>
                       <span className="min-w-0 break-words whitespace-normal">{w.binding_source || "-"}</span>
                       <span>{w.connected_at ? new Date(w.connected_at * 1000).toLocaleTimeString() : "-"}</span>
                       <span>
@@ -1577,7 +1614,7 @@ export function SystemSettings({ active }: { active: boolean }) {
                     </div>
                   ))}
                   {dedicatedWorkers.length === 0 ? (
-                    <div className="px-3 py-3 text-xs text-muted-foreground">No worker-mode connections</div>
+                    <div className="px-3 py-3 text-xs text-muted-foreground">No refresh worker connections</div>
                   ) : null}
                 </div>
               </div>

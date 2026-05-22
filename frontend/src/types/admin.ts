@@ -82,6 +82,54 @@ export interface KillDedicatedWorkerSessionsResponse {
   detail?: string
 }
 
+export interface CaptchaWorkerKeyRow {
+  id: number
+  key_prefix: string
+  label?: string | null
+  key_plaintext?: string | null
+  is_active?: boolean | number | null
+  last_seen_at?: string | null
+  last_instance_id?: string | null
+  last_error?: string | null
+  created_at?: string | null
+  updated_at?: string | null
+}
+
+export interface CaptchaWorkerSessionRow {
+  worker_session_id: string
+  instance_id?: string
+  captcha_worker_id?: number | null
+  captcha_worker_key_label?: string | null
+  captcha_worker_key_prefix?: string | null
+  connected_at?: number
+}
+
+export interface ListCaptchaWorkerKeysResponse {
+  success?: boolean
+  keys?: CaptchaWorkerKeyRow[]
+  sessions?: CaptchaWorkerSessionRow[]
+}
+
+export interface CreateCaptchaWorkerKeyResponse {
+  success?: boolean
+  key?: CaptchaWorkerKeyRow
+  captcha_worker_key?: string
+  detail?: string
+}
+
+export interface DeleteCaptchaWorkerKeyResponse {
+  success?: boolean
+  key_id?: number
+  detail?: string
+}
+
+export interface KillCaptchaWorkerSessionsResponse {
+  success?: boolean
+  killed_count?: number
+  message?: string
+  detail?: string
+}
+
 /** Paginated list from GET /api/logs */
 export interface LogsListResponse {
   logs: LogListItem[]
