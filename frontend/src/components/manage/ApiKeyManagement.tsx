@@ -755,7 +755,16 @@ export function ApiKeyManagement() {
                             }
                           />
                         </TableCell>
-                        <TableCell className="font-mono text-xs">{row.key_prefix}</TableCell>
+                        <TableCell className="font-mono text-xs">
+                          <button
+                            type="button"
+                            className="max-w-full text-left break-all text-primary hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                            onClick={() => void copyCaptchaWorkerKey(String(row.key_plaintext || ""))}
+                            title="Click to copy full key"
+                          >
+                            {row.key_prefix}
+                          </button>
+                        </TableCell>
                         <TableCell>{activeSessions}</TableCell>
                         <TableCell className="text-xs">{row.last_seen_at || "-"}</TableCell>
                         <TableCell>
@@ -766,7 +775,7 @@ export function ApiKeyManagement() {
                             <Button size="icon" variant="outline" disabled={busy} onClick={() => void saveCaptchaWorkerKey(row)} title="Save label">
                               {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Pencil className="h-4 w-4" />}
                             </Button>
-                            <Button size="icon" variant="outline" onClick={() => void copyCaptchaWorkerKey(String(row.key_plaintext || ""))} title="Copy full key">
+                            <Button type="button" size="icon" variant="outline" onClick={() => void copyCaptchaWorkerKey(String(row.key_plaintext || ""))} title="Copy full key">
                               <Copy className="h-4 w-4" />
                             </Button>
                             <Button size="icon" variant="outline" disabled={busy} onClick={() => void killCaptchaWorkerSessions(row)} title="Kill sessions">
