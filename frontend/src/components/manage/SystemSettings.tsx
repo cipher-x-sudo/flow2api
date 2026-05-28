@@ -680,7 +680,6 @@ export function SystemSettings({ active }: { active: boolean }) {
 
   const m = captcha.captcha_method
   const extensionModeActive = m === "extension"
-  const supportsAtRefreshMode = ["extension", "browser", "personal", "remote_browser"].includes(m)
   const captchaWorkers = extensionWorkers.filter((w) => w.captcha_worker_id != null)
   const endUserWorkers = extensionWorkers.filter((w) => w.managed_api_key_id !== null)
   const refreshWorkers = extensionWorkers.filter(
@@ -775,7 +774,6 @@ export function SystemSettings({ active }: { active: boolean }) {
         </CardContent>
       </Card>
 
-      {supportsAtRefreshMode ? (
       <Card className="lg:col-span-2">
         <CardHeader>
           <CardTitle>Proxy</CardTitle>
@@ -812,7 +810,6 @@ export function SystemSettings({ active }: { active: boolean }) {
           </p>
         </CardContent>
       </Card>
-      ) : null}
 
       <Card>
         <CardHeader>
