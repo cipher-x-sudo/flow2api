@@ -107,12 +107,12 @@ class RailwayRuntimeConfigTests(unittest.TestCase):
     def test_cache_base_url_env_wins_after_runtime_db_reload(self):
         with patch.dict(
             os.environ,
-            {"FLOW2API_CACHE_BASE_URL": "https://api.prismacreative.online/"},
+            {"FLOW2API_CACHE_BASE_URL": "https://flow-api.prismacreative.online/"},
             clear=False,
         ):
             cfg = Config()
             cfg.set_cache_base_url("https://admin-flow.prismacreative.online")
-            self.assertEqual(cfg.cache_base_url, "https://api.prismacreative.online")
+            self.assertEqual(cfg.cache_base_url, "https://flow-api.prismacreative.online")
 
 
 class ApiOnlyHostRouteTests(unittest.TestCase):
@@ -144,7 +144,7 @@ class RailwayFreshSeedTests(unittest.IsolatedAsyncioTestCase):
                 "FLOW2API_ADMIN_PASSWORD": "rail-secret",
                 "FLOW2API_API_KEY": "rail-api-key",
                 "FLOW2API_CAPTCHA_METHOD": "extension",
-                "FLOW2API_CACHE_BASE_URL": "https://api.prismacreative.online",
+                "FLOW2API_CACHE_BASE_URL": "https://flow-api.prismacreative.online",
                 "FLOW2API_DEBUG_ENABLED": "true",
                 "FLOW2API_DEBUG_LOG_REQUESTS": "false",
             }
@@ -163,7 +163,7 @@ class RailwayFreshSeedTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(admin.password, "rail-secret")
                 self.assertEqual(admin.api_key, "rail-api-key")
                 self.assertEqual(captcha.captcha_method, "extension")
-                self.assertEqual(cache.cache_base_url, "https://api.prismacreative.online")
+                self.assertEqual(cache.cache_base_url, "https://flow-api.prismacreative.online")
                 self.assertTrue(debug.enabled)
                 self.assertFalse(debug.log_requests)
 
