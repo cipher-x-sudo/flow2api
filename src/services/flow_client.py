@@ -545,9 +545,18 @@ class FlowClient:
                 debug_logger.log_error(f"[API FAILED] Request Body: {json_data}")
                 debug_logger.log_error(f"[API FAILED] Exception: {error_msg}")
 
+            http2_transport_error = self._is_http2_transport_error(error_msg)
+            if http2_transport_error:
+                debug_logger.log_warning(
+                    "🚨 [HTTP2 TRANSPORT] curl_cffi/libcurl HTTP/2 failure detected: "
+                    f"method={method.upper()}, url={url}, proxy={_proxy_endpoint_for_log(proxy_url)}, "
+                    f"timeout={request_timeout}s, allow_urllib_fallback={allow_urllib_fallback}, "
+                    f"error={error_msg[:240]}"
+                )
+
             if allow_urllib_fallback and self._should_fallback_to_urllib(error_msg):
                 debug_logger.log_warning(
-                    f"[HTTP FALLBACK] curl_cffi 请求失败，回退 urllib: {method.upper()} {url}"
+                    f"⚠️ [HTTP FALLBACK] curl_cffi request failed, falling back to urllib: {method.upper()} {url}"
                 )
                 try:
                     urllib_result = await asyncio.to_thread(
@@ -695,22 +704,18 @@ class FlowClient:
 
     def _should_fallback_to_urllib(self, error_message: str) -> bool:
         """判断是否应从 curl_cffi 回退到 urllib。"""
+        if self._is_http2_transport_error(error_message):
+            return True
         error_lower = (error_message or "").lower()
         return any(
             keyword in error_lower
             for keyword in [
                 "curl: (6)",
                 "curl: (7)",
-                "curl: (16)",
                 "curl: (28)",
                 "curl: (35)",
                 "curl: (52)",
                 "curl: (56)",
-                "curle_http2",
-                "http/2 framing",
-                "http2 framing",
-                "http/2 stream",
-                "http2 stream",
                 "connection timed out",
                 "could not connect",
                 "failed to connect",
@@ -802,19 +807,27 @@ class FlowClient:
             "curl: (7)",
         ])
 
-    def _is_retryable_network_error(self, error_str: str) -> bool:
-        """识别可重试的 TLS/连接类网络错误。"""
-        error_lower = (error_str or "").lower()
+    def _is_http2_transport_error(self, error_message: str) -> bool:
+        """Recognize curl/libcurl HTTP/2 transport failures for targeted fallback logs."""
+        error_lower = (error_message or "").lower()
         return any(keyword in error_lower for keyword in [
             "curl: (16)",
-            "curl: (35)",
-            "curl: (52)",
-            "curl: (56)",
             "curle_http2",
             "http/2 framing",
             "http2 framing",
             "http/2 stream",
             "http2 stream",
+        ])
+
+    def _is_retryable_network_error(self, error_str: str) -> bool:
+        """识别可重试的 TLS/连接类网络错误。"""
+        if self._is_http2_transport_error(error_str):
+            return True
+        error_lower = (error_str or "").lower()
+        return any(keyword in error_lower for keyword in [
+            "curl: (35)",
+            "curl: (52)",
+            "curl: (56)",
             "ssl_error_syscall",
             "tls connect error",
             "ssl connect error",

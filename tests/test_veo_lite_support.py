@@ -19,6 +19,9 @@ class FlowClientTransportErrorTests(unittest.TestCase):
         self.assertTrue(
             self.client._should_fallback_to_urllib("Failed to perform, curl: (16) .")
         )
+        self.assertTrue(
+            self.client._is_http2_transport_error("Failed to perform, curl: (16) .")
+        )
 
     def test_curl_http2_error_is_retryable_network_error(self):
         error = "Flow API request failed: Failed to perform, curl: (16) ."
@@ -29,6 +32,7 @@ class FlowClientTransportErrorTests(unittest.TestCase):
     def test_http2_framing_text_is_retryable_network_error(self):
         error = "CURLE_HTTP2: problem detected in the HTTP/2 framing layer"
 
+        self.assertTrue(self.client._is_http2_transport_error(error))
         self.assertTrue(self.client._should_fallback_to_urllib(error))
         self.assertTrue(self.client._is_retryable_network_error(error))
 
