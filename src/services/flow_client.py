@@ -1586,6 +1586,16 @@ class FlowClient:
                 )
                 if should_retry:
                     continue
+                await _emit_poll_task_progress(
+                    poll_task_progress,
+                    {
+                        "status": "failed",
+                        "job_phase": "failed",
+                        "upscale_status": "failed",
+                        "captcha_status": "token_failed",
+                        "captcha_detail": "Failed to obtain reCAPTCHA token",
+                    },
+                )
                 raise last_error
             upsample_session_id = session_id or self._generate_session_id()
 
@@ -1629,11 +1639,24 @@ class FlowClient:
                 )
 
                 # 返回 base64 编码的图片
+                encoded_image = result.get("encodedImage", "")
+                if not encoded_image:
+                    await _emit_poll_task_progress(
+                        poll_task_progress,
+                        {
+                            "status": "failed",
+                            "job_phase": "failed",
+                            "upscale_status": "failed",
+                            "captcha_status": "idle",
+                            "captcha_detail": "Upscale response missing encodedImage",
+                        },
+                    )
+                    return ""
                 await _emit_poll_task_progress(
                     poll_task_progress,
                     {"captcha_status": "idle"},
                 )
-                return result.get("encodedImage", "")
+                return encoded_image
             except Exception as e:
                 last_error = e
                 err_text = str(e)
@@ -1658,10 +1681,33 @@ class FlowClient:
                 )
                 if should_retry:
                     continue
+                await _emit_poll_task_progress(
+                    poll_task_progress,
+                    {
+                        "status": "failed",
+                        "job_phase": "failed",
+                        "upscale_status": "failed",
+                        "captcha_status": cap or "idle",
+                        "captcha_detail": err_text[:240],
+                    },
+                )
                 raise
             finally:
                 await self._notify_browser_captcha_request_finished(browser_id)
 
+        if last_error is not None:
+            err_text = str(last_error)
+            cap = classify_recaptcha_upstream_failure(_http_status_from_flow_error(err_text), err_text)
+            await _emit_poll_task_progress(
+                poll_task_progress,
+                {
+                    "status": "failed",
+                    "job_phase": "failed",
+                    "upscale_status": "failed",
+                    "captcha_status": cap or "idle",
+                    "captcha_detail": err_text[:240],
+                },
+            )
         raise last_error
 
     # ========== 视频生成 (使用AT) - 异步返回 ==========

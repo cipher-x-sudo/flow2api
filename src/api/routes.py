@@ -892,6 +892,7 @@ def _extract_async_delivery_fields(
     base_result_urls = list(direct_urls)
     result_urls = list(direct_urls)
     delivery_urls = list(direct_urls)
+    suppress_delivery_urls = False
 
     if isinstance(generated_assets, dict):
         asset_type = generated_assets.get("type")
@@ -909,6 +910,7 @@ def _extract_async_delivery_fields(
             upscaled_image = generated_assets.get("upscaled_image")
             if isinstance(upscaled_image, dict):
                 upscale_url = upscaled_image.get("url") or upscaled_image.get("local_url")
+                has_upscale_url = isinstance(upscale_url, str) and bool(upscale_url.strip())
                 if isinstance(upscale_url, str) and upscale_url.strip():
                     result_urls = [upscale_url.strip()]
                     delivery_urls = [upscale_url.strip()]
@@ -919,12 +921,20 @@ def _extract_async_delivery_fields(
                 if delivery_mode == "inline_base64_fallback":
                     upscale_status = "failed"
                     upscale_error_message = "Upscale cache delivery failed; returned base64 fallback"
-                else:
+                elif has_upscale_url:
                     upscale_status = "completed"
+                else:
+                    upscale_status = "failed"
+                    upscale_error_message = "Upscale completed without a deliverable URL"
             elif requested_resolution is not None:
                 upscale_status = "failed"
                 if delivery_urls:
                     output_resolution = "1k"
+            if requested_resolution is not None and upscale_status != "completed":
+                suppress_delivery_urls = True
+                result_urls = []
+                delivery_urls = []
+                upscale_error_message = upscale_error_message or "Requested image upscale did not complete"
         elif asset_type == "video":
             final_video_url = generated_assets.get("final_video_url")
             if isinstance(final_video_url, str) and final_video_url.strip():
@@ -939,7 +949,7 @@ def _extract_async_delivery_fields(
     elif requested_resolution is None:
         upscale_status = "not_requested"
 
-    if not delivery_urls and base_result_urls:
+    if not suppress_delivery_urls and not delivery_urls and base_result_urls:
         delivery_urls = list(base_result_urls)
     if not output_resolution and delivery_urls:
         output_resolution = requested_resolution
@@ -986,6 +996,13 @@ async def _run_async_generation_task(
                 payload.get("error", {}).get("message", "Upstream generation error"),
                 selection_context=selection_context,
             )
+            requested_resolution = _infer_requested_resolution(normalized.model)
+            upscale_error_message = payload.get("upscale_error_message")
+            if not isinstance(upscale_error_message, str) or not upscale_error_message.strip():
+                upscale_error_message = error_msg if requested_resolution else None
+            captcha_status = _infer_async_failed_captcha_status(error_msg)
+            if payload.get("upscale_status") == "failed" and captcha_status == "unknown":
+                captcha_status = "idle"
             debug_logger.log_error(
                 "[ASYNC JOB] upstream error payload: "
                 f"task_id={task_id}, error={error_msg}, raw_error={payload.get('error')}"
@@ -993,15 +1010,45 @@ async def _run_async_generation_task(
             await handler.db.update_task(
                 task_id,
                 status="failed",
+                result_urls=[],
+                base_result_urls=[],
+                delivery_urls=[],
                 error_message=error_msg,
-                upscale_status="failed" if _infer_requested_resolution(normalized.model) else "not_requested",
+                upscale_status="failed" if requested_resolution else "not_requested",
+                upscale_error_message=upscale_error_message,
                 completed_at=datetime.utcnow(),
                 job_phase="failed",
-                captcha_status=_infer_async_failed_captcha_status(error_msg),
+                captcha_status=captcha_status,
             )
             return
 
         fields = _extract_async_delivery_fields(payload, normalized.model)
+        model_config = MODEL_CONFIG.get(normalized.model) or {}
+        if (
+            model_config.get("type") == "image"
+            and fields["requested_resolution"] is not None
+            and fields["upscale_status"] != "completed"
+        ):
+            error_msg = fields["upscale_error_message"] or "Requested image upscale did not complete"
+            await handler.db.update_task(
+                task_id,
+                status="failed",
+                result_urls=[],
+                base_result_urls=[],
+                delivery_urls=[],
+                requested_resolution=fields["requested_resolution"],
+                output_resolution=fields["output_resolution"],
+                upscale_status="failed",
+                upscale_error_message=error_msg,
+                error_message=error_msg,
+                completed_at=datetime.utcnow(),
+                job_phase="failed",
+                captcha_status="idle",
+            )
+            debug_logger.log_error(
+                f"[ASYNC JOB] failed requested image upscale: task_id={task_id}, error={error_msg}"
+            )
+            return
         await handler.db.update_task(
             task_id,
             status="completed",
@@ -1026,6 +1073,9 @@ async def _run_async_generation_task(
         await handler.db.update_task(
             task_id,
             status="failed",
+            result_urls=[],
+            base_result_urls=[],
+            delivery_urls=[],
             error_message=err_final,
             upscale_status="failed" if _infer_requested_resolution(normalized.model) else "not_requested",
             completed_at=datetime.utcnow(),
