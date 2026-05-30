@@ -209,13 +209,31 @@ class Database:
             disabled_reason = model.get("disabled_reason") or ("" if live_available else "Exact task builder is not available")
             await db.execute(
                 """
-                INSERT OR IGNORE INTO runway_models (
+                INSERT INTO runway_models (
                     public_model_id, display_name, kind, task_type, builder_key,
                     default_options, request_mapping, capability_schema, media_roles,
                     supported_modes, limits, feature_flags, cost_feature, source_version,
                     live_available, disabled_reason, last_synced_at, is_enabled
                 )
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)
+                ON CONFLICT(public_model_id) DO UPDATE SET
+                    display_name = CASE WHEN runway_models.builder_key = '' THEN excluded.display_name ELSE runway_models.display_name END,
+                    kind = CASE WHEN runway_models.builder_key = '' THEN excluded.kind ELSE runway_models.kind END,
+                    task_type = CASE WHEN runway_models.builder_key = '' THEN excluded.task_type ELSE runway_models.task_type END,
+                    builder_key = CASE WHEN runway_models.builder_key = '' THEN excluded.builder_key ELSE runway_models.builder_key END,
+                    default_options = CASE WHEN runway_models.builder_key = '' THEN excluded.default_options ELSE runway_models.default_options END,
+                    request_mapping = CASE WHEN runway_models.builder_key = '' THEN excluded.request_mapping ELSE runway_models.request_mapping END,
+                    capability_schema = CASE WHEN runway_models.capability_schema = '{}' THEN excluded.capability_schema ELSE runway_models.capability_schema END,
+                    media_roles = CASE WHEN runway_models.media_roles = '[]' THEN excluded.media_roles ELSE runway_models.media_roles END,
+                    supported_modes = CASE WHEN runway_models.supported_modes = '[]' THEN excluded.supported_modes ELSE runway_models.supported_modes END,
+                    limits = CASE WHEN runway_models.limits = '{}' THEN excluded.limits ELSE runway_models.limits END,
+                    feature_flags = CASE WHEN runway_models.feature_flags = '[]' THEN excluded.feature_flags ELSE runway_models.feature_flags END,
+                    cost_feature = CASE WHEN runway_models.cost_feature = '' THEN excluded.cost_feature ELSE runway_models.cost_feature END,
+                    source_version = CASE WHEN runway_models.source_version = '' THEN excluded.source_version ELSE runway_models.source_version END,
+                    live_available = CASE WHEN runway_models.source_version = '' THEN excluded.live_available ELSE runway_models.live_available END,
+                    disabled_reason = CASE WHEN runway_models.disabled_reason = '' THEN excluded.disabled_reason ELSE runway_models.disabled_reason END,
+                    last_synced_at = COALESCE(runway_models.last_synced_at, CURRENT_TIMESTAMP),
+                    updated_at = CURRENT_TIMESTAMP
                 """,
                 (
                     model["public_model_id"],
