@@ -642,7 +642,7 @@ export function RunwaySettings({ active }: { active: boolean }) {
           <div className="flex flex-wrap gap-2">
             <Button variant="outline" onClick={syncModels} disabled={busy}>
               <RefreshCw className="mr-2 h-4 w-4" />
-              Sync presets
+              Sync models
             </Button>
             <Button onClick={saveConfig} disabled={busy}>
               <Save className="mr-2 h-4 w-4" />
@@ -773,10 +773,16 @@ export function RunwaySettings({ active }: { active: boolean }) {
         <CardHeader className="space-y-4 border-b pb-4">
           <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
             <CardTitle>Runway Models</CardTitle>
-            <Button onClick={openAddModel}>
-              <Plus className="mr-2 h-4 w-4" />
-              Add model
-            </Button>
+            <div className="flex flex-wrap gap-2">
+              <Button variant="outline" onClick={syncModels} disabled={busy}>
+                <RefreshCw className="mr-2 h-4 w-4" />
+                Sync models
+              </Button>
+              <Button onClick={openAddModel}>
+                <Plus className="mr-2 h-4 w-4" />
+                Add model
+              </Button>
+            </div>
           </div>
           <div className="flex flex-col gap-3 xl:flex-row xl:items-center">
             <div className="relative min-w-[240px] flex-1">
