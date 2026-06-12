@@ -2505,11 +2505,11 @@ class GenerationHandler:
                         except Exception as e:
                             debug_logger.log_error(f"[CONCAT] 拼接失败: {str(e)}")
 
-                    # 缓存视频 (如果启用)
+                    # Generated videos must be cached before they are returned to clients.
                     await self._update_request_log_progress(request_log_state, token_id=token.id, status_text="caching_video", progress=92)
                     try:
                         if stream:
-                            yield self._create_stream_chunk("æ­£åœ¨ç¼“å­˜è§†é¢‘æ–‡ä»¶...\n")
+                            yield self._create_stream_chunk("Caching generated video file...\n")
                         cached_filename = await self.file_cache.download_and_cache(
                             source_video_url,
                             "video",
@@ -2521,10 +2521,10 @@ class GenerationHandler:
                             cached_filename, response_state, flow_project_id=project_id
                         )
                         if stream:
-                            yield self._create_stream_chunk("âœ… è§†é¢‘ç¼“å­˜æˆåŠŸ,å‡†å¤‡è¿”å›žç¼“å­˜åœ°å€...\n")
+                            yield self._create_stream_chunk("Video cached successfully, returning local cache URL...\n")
                     except Exception as e:
                         cache_error = self._normalize_error_message(e, max_length=240)
-                        error_msg = f"è§†é¢‘ç”ŸæˆæˆåŠŸï¼Œä½†ç¼“å­˜è§†é¢‘å¤±è´¥: {cache_error}"
+                        error_msg = f"Video generated successfully, but caching the video failed: {cache_error}"
                         debug_logger.log_error(f"Failed to cache video: {str(e)}")
                         await self._fail_video_task(checked_operations, error_msg)
                         self._mark_generation_failed(
@@ -2534,40 +2534,13 @@ class GenerationHandler:
                             error_extra={"video_cache_status": "failed"},
                         )
                         if stream:
-                            yield self._create_stream_chunk(f"âŒ {error_msg}\n")
+                            yield self._create_stream_chunk(f"Error: {error_msg}\n")
                         yield self._create_error_response(
                             error_msg,
                             status_code=502,
                             extra_fields={"video_cache_status": "failed"},
                         )
                         return
-                    if False and config.cache_enabled:
-                        await self._update_request_log_progress(request_log_state, token_id=token.id, status_text="caching_video", progress=92)
-                        try:
-                            if stream:
-                                yield self._create_stream_chunk("正在缓存视频文件...\n")
-                            cached_filename = await self.file_cache.download_and_cache(
-                                video_url,
-                                "video",
-                                api_key_id=api_key_id,
-                                token_id=token.id,
-                                flow_project_id=project_id,
-                            )
-                            local_url = self._build_cache_url(
-                                cached_filename, response_state, flow_project_id=project_id
-                            )
-                            if stream:
-                                yield self._create_stream_chunk("✅ 视频缓存成功,准备返回缓存地址...\n")
-                        except Exception as e:
-                            debug_logger.log_error(f"Failed to cache video: {str(e)}")
-                            # 缓存失败不影响结果返回,使用原始URL
-                            local_url = video_url
-                            if stream:
-                                cache_error = self._normalize_error_message(e, max_length=120)
-                                yield self._create_stream_chunk(f"⚠️ 缓存失败: {cache_error}\n正在返回源链接...\n")
-                    else:
-                        if stream:
-                            yield self._create_stream_chunk("缓存已关闭,正在返回源链接...\n")
 
                     # 更新数据库
                     task_id = operation["operation"]["name"]
