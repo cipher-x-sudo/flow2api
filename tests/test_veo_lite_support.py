@@ -373,10 +373,17 @@ class VeoLiteGenerationHandlerTests(unittest.TestCase):
 
 
 class VideoCacheDeliveryTests(unittest.IsolatedAsyncioTestCase):
-    def _build_handler(self, operation_status, cache_result="cached.mp4", cache_error=None):
+    def _build_handler(
+        self,
+        operation_status,
+        cache_result="cached.mp4",
+        cache_error=None,
+        resolved_cdn_url="https://flow-content.google/video/media-1?token=abc",
+    ):
         handler = GenerationHandler.__new__(GenerationHandler)
         handler.flow_client = SimpleNamespace(
             check_video_status=AsyncMock(return_value=operation_status),
+            resolve_media_download_url=AsyncMock(return_value=resolved_cdn_url),
         )
         handler.file_cache = SimpleNamespace(
             download_and_cache=AsyncMock(side_effect=cache_error)
@@ -395,7 +402,7 @@ class VideoCacheDeliveryTests(unittest.IsolatedAsyncioTestCase):
         return handler
 
     async def _run_poll(self, handler):
-        token = SimpleNamespace(id=7, at="at-token", video_concurrency=1)
+        token = SimpleNamespace(id=7, at="at-token", st="st-token", video_concurrency=1)
         generation_result = handler._create_generation_result()
         response_state = handler._create_response_state()
         response_state["base_url"] = "https://api.example.com"
@@ -440,6 +447,7 @@ class VideoCacheDeliveryTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_video_redirect_source_is_cached_and_only_cache_url_is_returned(self):
         source_url = "https://labs.google/fx/api/trpc/media.getMediaUrlRedirect?name=media-1"
+        resolved_cdn_url = "https://flow-content.google/video/media-1?token=abc"
         handler = self._build_handler(
             self._successful_status(
                 {
@@ -447,19 +455,27 @@ class VideoCacheDeliveryTests(unittest.IsolatedAsyncioTestCase):
                     "mediaGenerationId": "media-1",
                     "aspectRatio": "VIDEO_ASPECT_RATIO_PORTRAIT",
                 }
-            )
+            ),
+            resolved_cdn_url=resolved_cdn_url,
         )
 
         generation_result, chunks = await self._run_poll(handler)
 
         self.assertTrue(generation_result["success"])
+        handler.flow_client.resolve_media_download_url.assert_awaited_once_with(
+            media_id="media-1",
+            st="st-token",
+            at="at-token",
+            token_id=7,
+        )
         handler.file_cache.download_and_cache.assert_awaited_once_with(
-            source_url,
+            resolved_cdn_url,
             "video",
             api_key_id=11,
             token_id=7,
             flow_project_id="project-1",
             auth_token="at-token",
+            session_token="st-token",
         )
         returned_url = chunks[-1]["generated_assets"]["final_video_url"]
         self.assertIn("/api/cache/blob/cached.mp4", returned_url)

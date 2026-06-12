@@ -1,4 +1,4 @@
-"""Generation handler for Flow2API"""
+﻿"""Generation handler for Flow2API"""
 import asyncio
 import base64
 import json
@@ -930,6 +930,18 @@ def _resolve_tier_two_model_key(model_key: str) -> str:
     else:
         candidate = model_key + "_ultra"
     return candidate if candidate in _known_video_model_keys() else model_key
+
+
+def _needs_video_url_resolve(source_video_url: Optional[str], video_media_id: Optional[str]) -> bool:
+    if not video_media_id:
+        return False
+    if not source_video_url:
+        return True
+    if "getMediaUrlRedirect" in source_video_url:
+        return True
+    if "flow-content.google" in source_video_url:
+        return False
+    return False
 
 
 class GenerationHandler:
@@ -2395,9 +2407,11 @@ class GenerationHandler:
                     uuid_match = re.search(r"/video/([0-9a-f-]{36})", source_video_url or "")
                     if uuid_match:
                         video_media_id = uuid_match.group(1)
+                    if not video_media_id and isinstance(operation, dict):
+                        video_media_id = operation.get("mediaName")
                     aspect_ratio = video_info.get("aspectRatio", "VIDEO_ASPECT_RATIO_LANDSCAPE")
 
-                    if not source_video_url:
+                    if not source_video_url and not video_media_id:
                         error_msg = "视频生成失败: 视频URL为空"
                         operation_body = operation.get("operation", {}) if isinstance(operation, dict) else {}
                         url_empty_diagnostics = {
@@ -2505,6 +2519,36 @@ class GenerationHandler:
                         except Exception as e:
                             debug_logger.log_error(f"[CONCAT] 拼接失败: {str(e)}")
 
+                    if _needs_video_url_resolve(source_video_url, video_media_id):
+                        try:
+                            source_video_url = await self.flow_client.resolve_media_download_url(
+                                media_id=video_media_id,
+                                st=token.st,
+                                at=token.at,
+                                token_id=token.id,
+                            )
+                        except Exception as resolve_error:
+                            error_msg = (
+                                "Video generated successfully, but resolving the download URL failed: "
+                                f"{self._normalize_error_message(resolve_error, max_length=240)}"
+                            )
+                            debug_logger.log_error(f"[VIDEO] media redirect resolve failed: {resolve_error}")
+                            await self._fail_video_task(checked_operations, error_msg)
+                            self._mark_generation_failed(
+                                generation_result,
+                                error_msg,
+                                status_code=502,
+                                error_extra={"video_cache_status": "resolve_failed"},
+                            )
+                            if stream:
+                                yield self._create_stream_chunk(f"Error: {error_msg}\n")
+                            yield self._create_error_response(
+                                error_msg,
+                                status_code=502,
+                                extra_fields={"video_cache_status": "resolve_failed"},
+                            )
+                            return
+
                     # Generated videos must be cached before they are returned to clients.
                     await self._update_request_log_progress(request_log_state, token_id=token.id, status_text="caching_video", progress=92)
                     try:
@@ -2517,6 +2561,7 @@ class GenerationHandler:
                             token_id=token.id,
                             flow_project_id=project_id,
                             auth_token=token.at,
+                            session_token=token.st,
                         )
                         local_url = self._build_cache_url(
                             cached_filename, response_state, flow_project_id=project_id

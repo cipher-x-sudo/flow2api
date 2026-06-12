@@ -126,11 +126,22 @@ class FileCache:
 
         return suffix
 
+    @staticmethod
+    def _sec_fetch_site_for_url(url: str) -> str:
+        host = (urlparse(url or "").hostname or "").lower()
+        if host.endswith("labs.google"):
+            return "same-origin"
+        if host.endswith("google.com") or host.endswith("googleusercontent.com"):
+            return "cross-site"
+        return "cross-site"
+
     def _build_download_headers(
         self,
         media_type: str,
         fingerprint: Optional[Dict[str, Any]] = None,
         auth_token: Optional[str] = None,
+        session_token: Optional[str] = None,
+        url: Optional[str] = None,
     ) -> Dict[str, str]:
         """构建媒体下载请求头，优先复用当前打码浏览器指纹。"""
         headers = {
@@ -142,9 +153,9 @@ class FileCache:
             "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
             "Accept-Encoding": "gzip, deflate, br",
             "Connection": "keep-alive",
-            "Referer": "https://labs.google/",
+            "Referer": "https://labs.google/fx/tools/flow",
             "Origin": "https://labs.google",
-            "Sec-Fetch-Site": "same-origin",
+            "Sec-Fetch-Site": self._sec_fetch_site_for_url(url or ""),
             "Sec-Fetch-Mode": "cors",
         }
 
@@ -173,7 +184,28 @@ class FileCache:
         clean_auth_token = (auth_token or "").strip()
         if clean_auth_token:
             headers["Authorization"] = f"Bearer {clean_auth_token}"
+        clean_session_token = (session_token or "").strip()
+        if clean_session_token and (
+            "getMediaUrlRedirect" in (url or "") or (urlparse(url or "").hostname or "").endswith("labs.google")
+        ):
+            headers["Cookie"] = f"__Secure-next-auth.session-token={clean_session_token}"
         return headers
+
+    def _log_download_rejection(
+        self,
+        *,
+        url: str,
+        status_code: int,
+        headers: Dict[str, str],
+        client_name: str,
+    ) -> None:
+        host = urlparse(url or "").hostname or "<unknown>"
+        debug_logger.log_warning(
+            f"{client_name} video cache download rejected: "
+            f"status={status_code}, host={host}, "
+            f"auth={'yes' if headers.get('Authorization') else 'no'}, "
+            f"cookie={'yes' if headers.get('Cookie') else 'no'}"
+        )
 
     def _is_valid_download_response(self, content: bytes, content_type: str, media_type: str) -> bool:
         if not content:
@@ -388,6 +420,7 @@ class FileCache:
         token_id: Optional[int] = None,
         flow_project_id: Optional[str] = None,
         auth_token: Optional[str] = None,
+        session_token: Optional[str] = None,
     ) -> str:
         """
         Download file from URL and cache it locally
@@ -455,6 +488,8 @@ class FileCache:
                 media_type,
                 fingerprint=fingerprint,
                 auth_token=auth_token,
+                session_token=session_token,
+                url=url,
             )
             python_download_error: Optional[Exception] = None
 
@@ -485,6 +520,12 @@ class FileCache:
                             method_name="curl_cffi",
                         )
                     if media_type == "video" and response.status_code in (401, 403):
+                        self._log_download_rejection(
+                            url=url,
+                            status_code=response.status_code,
+                            headers=headers,
+                            client_name="curl_cffi",
+                        )
                         python_download_error = Exception("Video cache download was rejected by Flow media endpoint")
                     else:
                         python_download_error = Exception(f"Python video cache download failed with HTTP {response.status_code}")
@@ -521,6 +562,12 @@ class FileCache:
                         method_name="httpx",
                     )
                 if media_type == "video" and response.status_code in (401, 403):
+                    self._log_download_rejection(
+                        url=url,
+                        status_code=response.status_code,
+                        headers=headers,
+                        client_name="httpx",
+                    )
                     python_download_error = Exception("Video cache download was rejected by Flow media endpoint")
                 else:
                     python_download_error = Exception(f"Python video cache download failed with HTTP {response.status_code}")
@@ -550,6 +597,8 @@ class FileCache:
                 ]
                 if "Authorization" in headers:
                     wget_cmd.append(f"--header=Authorization: {headers['Authorization']}")
+                if "Cookie" in headers:
+                    wget_cmd.append(f"--header=Cookie: {headers['Cookie']}")
 
                 if "sec-ch-ua" in headers:
                     wget_cmd.append(f"--header=sec-ch-ua: {headers['sec-ch-ua']}")
@@ -615,6 +664,8 @@ class FileCache:
                     curl_cmd.extend(["-H", f"sec-ch-ua-platform: {headers['sec-ch-ua-platform']}"])
                 if "Authorization" in headers:
                     curl_cmd.extend(["-H", f"Authorization: {headers['Authorization']}"])
+                if "Cookie" in headers:
+                    curl_cmd.extend(["-H", f"Cookie: {headers['Cookie']}"])
                 if proxy_url:
                     curl_cmd.extend(["-x", proxy_url])
 
