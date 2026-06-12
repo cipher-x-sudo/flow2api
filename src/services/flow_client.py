@@ -1764,6 +1764,22 @@ class FlowClient:
                 return name.strip()
         return None
 
+    def _extract_video_media_id(self, media: Dict[str, Any]) -> Optional[str]:
+        if not isinstance(media, dict):
+            return None
+        video = media.get("video") if isinstance(media.get("video"), dict) else {}
+        for candidate in (
+            media.get("mediaGenerationId"),
+            media.get("mediaId"),
+            video.get("mediaGenerationId"),
+            video.get("mediaId"),
+            self._find_nested_string(media.get("mediaMetadata", {}), ("mediaGenerationId", "mediaId")),
+            self._extract_media_name(media),
+        ):
+            if isinstance(candidate, str) and candidate.strip():
+                return candidate.strip()
+        return None
+
     def _build_video_media_generation_context(self, batch_id: Optional[str] = None) -> Dict[str, Any]:
         return {
             "batchId": batch_id or str(uuid.uuid4()),
@@ -1802,14 +1818,28 @@ class FlowClient:
 
     def _extract_video_url_from_media(self, media: Dict[str, Any]) -> Optional[str]:
         video = media.get("video") if isinstance(media.get("video"), dict) else {}
+        direct_url_keys = (
+            "fifeUrl",
+            "videoUrl",
+            "outputUri",
+            "downloadUri",
+            "servingBaseUri",
+            "servingUri",
+            "mediaUrl",
+            "downloadUrl",
+        )
         candidates = [
-            self._find_nested_string(video, ("fifeUrl", "videoUrl", "outputUri", "downloadUri")),
-            self._find_nested_string(media, ("fifeUrl", "videoUrl", "outputUri", "downloadUri")),
+            self._find_nested_string(video, direct_url_keys),
+            self._find_nested_string(media, direct_url_keys),
             self._find_nested_string(video, ("uri", "url")),
+            self._find_nested_string(media, ("uri", "url")),
         ]
         for candidate in candidates:
             if candidate and (candidate.startswith("http://") or candidate.startswith("https://") or candidate.startswith("/")):
                 return candidate
+        media_id = self._extract_video_media_id(media)
+        if media_id:
+            return f"{self.labs_base_url}/trpc/media.getMediaUrlRedirect?name={quote(media_id, safe='')}"
         return None
 
     def _media_to_video_operation(
@@ -1821,6 +1851,7 @@ class FlowClient:
             return None
 
         media_name = self._extract_media_name(media)
+        video_media_id = self._extract_video_media_id(media) or media_name
         video = media.get("video") if isinstance(media.get("video"), dict) else {}
         video_operation = video.get("operation") if isinstance(video.get("operation"), dict) else {}
         operation_name = (
@@ -1860,8 +1891,8 @@ class FlowClient:
         video_metadata: Dict[str, Any] = {}
         if video_url:
             video_metadata["fifeUrl"] = video_url
-        if media_name:
-            video_metadata["mediaGenerationId"] = media_name
+        if video_media_id:
+            video_metadata["mediaGenerationId"] = video_media_id
         if aspect_ratio:
             video_metadata["aspectRatio"] = aspect_ratio
         if video_metadata:

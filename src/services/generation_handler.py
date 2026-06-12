@@ -2399,8 +2399,24 @@ class GenerationHandler:
 
                     if not video_url:
                         error_msg = "视频生成失败: 视频URL为空"
+                        operation_body = operation.get("operation", {}) if isinstance(operation, dict) else {}
+                        url_empty_diagnostics = {
+                            "operation_name": operation_body.get("name") if isinstance(operation_body, dict) else None,
+                            "status": status,
+                            "metadata_keys": sorted(metadata.keys()) if isinstance(metadata, dict) else [],
+                            "video_keys": sorted(video_info.keys()) if isinstance(video_info, dict) else [],
+                            "media_id": (video_media_id or operation.get("mediaName")) if isinstance(operation, dict) else None,
+                        }
+                        debug_logger.log_error(
+                            f"[VIDEO] successful status missing URL: {url_empty_diagnostics}"
+                        )
                         await self._fail_video_task(checked_operations, error_msg)
-                        self._mark_generation_failed(generation_result, error_msg)
+                        self._mark_generation_failed(
+                            generation_result,
+                            error_msg,
+                            status_code=502,
+                            error_extra={"video_url_empty_diagnostics": url_empty_diagnostics},
+                        )
                         yield self._create_error_response(error_msg, status_code=502)
                         return
 

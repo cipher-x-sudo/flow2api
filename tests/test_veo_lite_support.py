@@ -555,6 +555,111 @@ class VeoLiteFlowClientTests(unittest.IsolatedAsyncioTestCase):
             "https://flow-content.google/video/11111111-1111-1111-1111-111111111111?token=abc",
         )
 
+    async def test_check_video_status_uses_serving_base_uri_as_video_url(self):
+        async def fake_make_request(method, url, json_data, use_at, at_token, **kwargs):
+            return {
+                "media": [
+                    {
+                        "name": "media-1",
+                        "projectId": "project-1",
+                        "mediaMetadata": {
+                            "mediaStatus": {
+                                "mediaGenerationStatus": "MEDIA_GENERATION_STATUS_SUCCESSFUL"
+                            }
+                        },
+                        "video": {
+                            "servingBaseUri": "https://flow-content.google/video/serving-base",
+                            "mediaGenerationId": "video-media-1",
+                        },
+                    }
+                ]
+            }
+
+        self.client._make_request = AsyncMock(side_effect=fake_make_request)
+
+        result = await self.client.check_video_status(
+            at="at-token",
+            operations=[
+                {
+                    "operation": {"name": "media-1"},
+                    "projectId": "project-1",
+                }
+            ],
+        )
+
+        video = result["operations"][0]["operation"]["metadata"]["video"]
+        self.assertEqual(video["fifeUrl"], "https://flow-content.google/video/serving-base")
+        self.assertEqual(video["mediaGenerationId"], "video-media-1")
+
+    async def test_check_video_status_synthesizes_media_redirect_url(self):
+        async def fake_make_request(method, url, json_data, use_at, at_token, **kwargs):
+            return {
+                "media": [
+                    {
+                        "name": "media 1/with symbols",
+                        "projectId": "project-1",
+                        "mediaMetadata": {
+                            "mediaStatus": {
+                                "mediaGenerationStatus": "MEDIA_GENERATION_STATUS_SUCCESSFUL"
+                            }
+                        },
+                        "video": {},
+                    }
+                ]
+            }
+
+        self.client._make_request = AsyncMock(side_effect=fake_make_request)
+
+        result = await self.client.check_video_status(
+            at="at-token",
+            operations=[
+                {
+                    "operation": {"name": "media 1/with symbols"},
+                    "projectId": "project-1",
+                }
+            ],
+        )
+
+        video = result["operations"][0]["operation"]["metadata"]["video"]
+        self.assertEqual(
+            video["fifeUrl"],
+            f"{self.client.labs_base_url}/trpc/media.getMediaUrlRedirect?name=media%201%2Fwith%20symbols",
+        )
+        self.assertEqual(video["mediaGenerationId"], "media 1/with symbols")
+
+    async def test_check_video_status_without_url_or_media_id_does_not_synthesize_url(self):
+        async def fake_make_request(method, url, json_data, use_at, at_token, **kwargs):
+            return {
+                "media": [
+                    {
+                        "projectId": "project-1",
+                        "mediaMetadata": {
+                            "mediaStatus": {
+                                "mediaGenerationStatus": "MEDIA_GENERATION_STATUS_SUCCESSFUL"
+                            }
+                        },
+                        "video": {
+                            "operation": {"name": "operation-1"},
+                        },
+                    }
+                ]
+            }
+
+        self.client._make_request = AsyncMock(side_effect=fake_make_request)
+
+        result = await self.client.check_video_status(
+            at="at-token",
+            operations=[
+                {
+                    "operation": {"name": "operation-1"},
+                    "projectId": "project-1",
+                }
+            ],
+        )
+
+        operation = result["operations"][0]
+        self.assertNotIn("metadata", operation["operation"])
+
     async def test_generate_video_start_end_uses_v2_payload_for_interpolation_lite(self):
         captured = {}
 
