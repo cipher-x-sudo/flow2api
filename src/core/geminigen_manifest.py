@@ -19,16 +19,12 @@ ASPECTS = {
 
 IMAGEN_MODELS = {
     "nano-banana-pro": "Nano Banana Pro",
-    "imagen-4": "Imagen 4",
     "nano-banana-2": "Nano Banana 2",
 }
 
 VEO_MODELS = {
     "veo-3.1-fast": "Veo 3.1 Fast",
     "veo-3.1-lite": "Veo 3.1 Lite",
-    "veo-3.1": "Veo 3.1",
-    "veo-2": "Veo 2",
-    "omni-flash": "Omni Flash",
 }
 
 
