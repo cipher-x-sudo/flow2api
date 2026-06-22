@@ -2002,18 +2002,37 @@ class Database:
             """, (today, today, today))
             stats_row = await stats_cursor.fetchone()
 
+            geminigen_cursor = await db.execute("""
+                SELECT
+                    COALESCE(SUM(CASE WHEN status = 'completed' AND kind = 'image' THEN 1 ELSE 0 END), 0) AS total_images,
+                    COALESCE(SUM(CASE WHEN status = 'completed' AND kind = 'video' THEN 1 ELSE 0 END), 0) AS total_videos,
+                    COALESCE(SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END), 0) AS total_errors,
+                    COALESCE(SUM(CASE
+                        WHEN status = 'completed' AND kind = 'image'
+                             AND DATE(completed_at, 'localtime') = ? THEN 1 ELSE 0 END), 0) AS today_images,
+                    COALESCE(SUM(CASE
+                        WHEN status = 'completed' AND kind = 'video'
+                             AND DATE(completed_at, 'localtime') = ? THEN 1 ELSE 0 END), 0) AS today_videos,
+                    COALESCE(SUM(CASE
+                        WHEN status = 'failed'
+                             AND DATE(completed_at, 'localtime') = ? THEN 1 ELSE 0 END), 0) AS today_errors
+                FROM geminigen_tasks
+            """, (today, today, today))
+            geminigen_row = await geminigen_cursor.fetchone()
+
             token_data = dict(token_row) if token_row else {}
             stats_data = dict(stats_row) if stats_row else {}
+            geminigen_data = dict(geminigen_row) if geminigen_row else {}
 
             return {
                 "total_tokens": int(token_data.get("total_tokens") or 0),
                 "active_tokens": int(token_data.get("active_tokens") or 0),
-                "total_images": int(stats_data.get("total_images") or 0),
-                "total_videos": int(stats_data.get("total_videos") or 0),
-                "total_errors": int(stats_data.get("total_errors") or 0),
-                "today_images": int(stats_data.get("today_images") or 0),
-                "today_videos": int(stats_data.get("today_videos") or 0),
-                "today_errors": int(stats_data.get("today_errors") or 0)
+                "total_images": int(stats_data.get("total_images") or 0) + int(geminigen_data.get("total_images") or 0),
+                "total_videos": int(stats_data.get("total_videos") or 0) + int(geminigen_data.get("total_videos") or 0),
+                "total_errors": int(stats_data.get("total_errors") or 0) + int(geminigen_data.get("total_errors") or 0),
+                "today_images": int(stats_data.get("today_images") or 0) + int(geminigen_data.get("today_images") or 0),
+                "today_videos": int(stats_data.get("today_videos") or 0) + int(geminigen_data.get("today_videos") or 0),
+                "today_errors": int(stats_data.get("today_errors") or 0) + int(geminigen_data.get("today_errors") or 0)
             }
 
     async def get_system_info_stats(self) -> Dict[str, int]:

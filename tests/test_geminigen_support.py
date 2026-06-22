@@ -1,9 +1,13 @@
 import asyncio
 import base64
 import json
+import os
+import tempfile
 import time
+from datetime import datetime, time as datetime_time, timedelta, timezone
 from types import SimpleNamespace
 
+from src.core.database import Database
 from src.services.geminigen_service import (
     GEMINIGEN_CAPACITY_ERROR_CODE,
     GeminiGenService,
@@ -11,7 +15,7 @@ from src.services.geminigen_service import (
 )
 from src.api import routes
 from src.core.geminigen_manifest import GEMINIGEN_MODEL_BY_ID, GEMINIGEN_MODEL_MANIFEST
-from src.core.models import GeminiGenAccount, GeminiGenTask
+from src.core.models import GeminiGenAccount, GeminiGenTask, Token
 from src.core.studio_model_catalog import geminigen_studio_metadata, native_studio_metadata
 
 
@@ -26,6 +30,108 @@ def test_extract_artifact_urls_prefers_final_download_url_over_preview():
     assert GeminiGenService.extract_artifact_urls(payload, "image") == [
         "https://cdn.example/final.png"
     ]
+
+
+def _local_date_as_utc_naive(day):
+    local_tz = datetime.now().astimezone().tzinfo
+    local_noon = datetime.combine(day, datetime_time(hour=12), tzinfo=local_tz)
+    return local_noon.astimezone(timezone.utc).replace(tzinfo=None)
+
+
+def test_dashboard_stats_combine_flow_and_terminal_geminigen_tasks():
+    async def run():
+        tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        tmp.close()
+        db = Database(tmp.name)
+        try:
+            await db.init_db()
+            today = datetime.now().astimezone().date()
+            today_completed_at = _local_date_as_utc_naive(today)
+            old_completed_at = _local_date_as_utc_naive(today - timedelta(days=2))
+
+            token_id = await db.add_token(Token(st="session", email="flow@example.com"))
+            async with db._connect(write=True) as conn:
+                await conn.execute(
+                    """
+                    UPDATE token_stats
+                    SET image_count = 4, video_count = 3, error_count = 2,
+                        today_image_count = 2, today_video_count = 1, today_error_count = 1,
+                        today_date = ?
+                    WHERE token_id = ?
+                    """,
+                    (today.isoformat(), token_id),
+                )
+                await conn.commit()
+
+            tasks = [
+                ("image-today", "image", "completed", today_completed_at),
+                ("image-old", "image", "completed", old_completed_at),
+                ("video-today", "video", "completed", today_completed_at),
+                ("error-today", "image", "failed", today_completed_at),
+                ("error-old", "video", "failed", old_completed_at),
+            ]
+            for job_id, kind, status, completed_at in tasks:
+                await db.create_geminigen_task(
+                    GeminiGenTask(
+                        job_id=job_id,
+                        public_model_id=f"test-{kind}-model",
+                        kind=kind,
+                        endpoint_type="veo-video" if kind == "video" else "imagen",
+                        status=status,
+                        completed_at=completed_at,
+                    )
+                )
+
+            return await db.get_dashboard_stats()
+        finally:
+            os.unlink(tmp.name)
+
+    stats = asyncio.run(run())
+
+    assert stats["total_images"] == 6
+    assert stats["total_videos"] == 4
+    assert stats["total_errors"] == 4
+    assert stats["today_images"] == 3
+    assert stats["today_videos"] == 2
+    assert stats["today_errors"] == 2
+
+
+def test_dashboard_stats_exclude_non_terminal_and_cancelled_geminigen_tasks():
+    async def run():
+        tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        tmp.close()
+        db = Database(tmp.name)
+        try:
+            await db.init_db()
+            completed_at = _local_date_as_utc_naive(datetime.now().astimezone().date())
+            tasks = [
+                ("queued", "image", "queued", None),
+                ("processing", "video", "processing", None),
+                ("cancelled", "image", "cancelled", completed_at),
+            ]
+            for job_id, kind, status, terminal_at in tasks:
+                await db.create_geminigen_task(
+                    GeminiGenTask(
+                        job_id=job_id,
+                        public_model_id=f"test-{kind}-model",
+                        kind=kind,
+                        endpoint_type="veo-video" if kind == "video" else "imagen",
+                        status=status,
+                        completed_at=terminal_at,
+                    )
+                )
+            return await db.get_dashboard_stats()
+        finally:
+            os.unlink(tmp.name)
+
+    stats = asyncio.run(run())
+
+    assert stats["total_images"] == 0
+    assert stats["total_videos"] == 0
+    assert stats["total_errors"] == 0
+    assert stats["today_images"] == 0
+    assert stats["today_videos"] == 0
+    assert stats["today_errors"] == 0
 
 
 def test_extract_artifact_urls_falls_back_to_preview_without_download_url():
