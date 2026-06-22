@@ -3,7 +3,7 @@ import { useAuth } from "../../contexts/AuthContext"
 import { adminFetch, adminJson } from "../../lib/adminApi"
 import type { LogDetail, LogListItem, LogsListResponse } from "../../types/admin"
 import { formatLogOutcomeRowClass, formatLogProgressField, logStatusPillClass, statusCodePillClass } from "./requestLogDetail"
-import { formatLogStatus, formatOutcome } from "./requestLogUi"
+import { formatLogStatus, formatOutcome, getOperationKind, operationLabel } from "./requestLogUi"
 import { LogDetailStatic } from "./LogDetailStatic"
 import { Card, CardContent, CardHeader, CardTitle } from "../ui/card"
 import { Switch } from "../ui/switch"
@@ -33,7 +33,7 @@ export function RequestLogs() {
     setLoading(true)
     try {
       const offset = page * LOG_PAGE_SIZE
-      const exclude = hideGeneration ? "&exclude_operations=generate_image%2Cgenerate_video" : ""
+      const exclude = hideGeneration ? "&exclude_operations=generate_image%2Cgenerate_video%2Cgeminigen_image%2Cgeminigen_video" : ""
       const r = await adminFetch(`/api/logs?limit=${LOG_PAGE_SIZE}&offset=${offset}${exclude}`, token)
       if (!r?.ok) throw new Error("fetch failed")
       const data = (await r.json()) as LogsListResponse | LogListItem[]
@@ -174,7 +174,9 @@ export function RequestLogs() {
                   const keyLabel = log.api_key_label || log.api_key_prefix || ""
                   return (
                     <TableRow key={log.id} className="border-border/60">
-                      <TableCell className="py-2.5 px-3 text-sm align-top">{log.operation || "-"}</TableCell>
+                      <TableCell className="py-2.5 px-3 text-sm align-top">
+                        {operationLabel(getOperationKind(log.operation), log.operation)}
+                      </TableCell>
                       <TableCell className="py-2.5 px-3 text-xs align-top">
                         <span
                           className={cn(keyLabel ? "text-foreground" : "text-muted-foreground")}

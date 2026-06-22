@@ -18,11 +18,12 @@ from curl_cffi.requests import AsyncSession
 from ..core.database import Database
 from ..core.geminigen_manifest import GEMINIGEN_MODEL_MANIFEST, geminigen_manifest_entry
 from ..core.logger import debug_logger
-from ..core.models import GeminiGenAccount, GeminiGenTask
+from ..core.models import GeminiGenAccount, GeminiGenTask, RequestLog
 from .file_cache import FileCache
 
 
 VIDEO_SUFFIXES = {".mp4", ".webm", ".mov", ".mkv", ".m4v"}
+GEMINIGEN_OPERATION_BY_KIND = {"image": "geminigen_image", "video": "geminigen_video"}
 
 
 class GeminiGenService:
@@ -201,6 +202,103 @@ class GeminiGenService:
         base = (base_url or "").strip().rstrip("/")
         return f"{base}/api/cache/blob/{quote(filename, safe='')}" if base else f"/api/cache/blob/{quote(filename, safe='')}"
 
+    @staticmethod
+    def _safe_log_json(value: Any) -> str:
+        def scrub(item: Any) -> Any:
+            if isinstance(item, dict):
+                clean: Dict[str, Any] = {}
+                for key, nested in item.items():
+                    lk = str(key).lower()
+                    if lk in {"raw_cookie", "cookie", "authorization", "bearer_token", "guard_id", "turnstile_token"}:
+                        clean[key] = "[redacted]"
+                    elif lk in {"ref_images", "images"} and isinstance(nested, list):
+                        clean[key] = [f"[media omitted #{idx + 1}]" for idx, _ in enumerate(nested)]
+                    elif isinstance(nested, str) and nested.startswith("data:image/"):
+                        clean[key] = f"[data URL omitted, length={len(nested)}]"
+                    elif isinstance(nested, str) and len(nested) > 4096:
+                        clean[key] = f"{nested[:800]}... [truncated, length={len(nested)}]"
+                    else:
+                        clean[key] = scrub(nested)
+                return clean
+            if isinstance(item, list):
+                return [scrub(nested) for nested in item]
+            if isinstance(item, str) and item.startswith("data:image/"):
+                return f"[data URL omitted, length={len(item)}]"
+            return item
+
+        return json.dumps(scrub(value), ensure_ascii=False)
+
+    async def _create_request_log(
+        self,
+        *,
+        api_key_id: Optional[int],
+        kind: str,
+        public_model_id: str,
+        endpoint_type: str,
+        prompt: str,
+        image_count: int,
+        options: Dict[str, Any],
+        job_id: str,
+    ) -> int:
+        operation = GEMINIGEN_OPERATION_BY_KIND.get(kind, "geminigen_image")
+        request_body = self._safe_log_json(
+            {
+                "provider": "geminigen",
+                "job_id": job_id,
+                "model": public_model_id,
+                "endpoint_type": endpoint_type,
+                "prompt": prompt,
+                "image_count": image_count,
+                "options": options or {},
+            }
+        )
+        return await self.db.add_request_log(
+            RequestLog(
+                token_id=None,
+                api_key_id=api_key_id,
+                operation=operation,
+                request_body=request_body,
+                response_body=self._safe_log_json({"status": "queued", "job_id": job_id}),
+                status_code=102,
+                duration=0,
+                status_text="geminigen_queued",
+                progress=0,
+            )
+        )
+
+    async def _update_request_log(
+        self,
+        log_id: Optional[int],
+        *,
+        status_text: str,
+        progress: int,
+        status_code: int = 102,
+        response: Optional[Dict[str, Any]] = None,
+        duration: float = 0,
+    ) -> None:
+        if not log_id:
+            return
+        try:
+            await self.db.update_request_log(
+                int(log_id),
+                response_body=self._safe_log_json(response or {"status": status_text}),
+                status_code=int(status_code),
+                duration=max(0.0, float(duration or 0)),
+                status_text=status_text,
+                progress=max(0, min(100, int(progress))),
+            )
+        except Exception as exc:
+            debug_logger.log_warning(f"GeminiGen request log update failed: {exc}")
+
+    @staticmethod
+    def _task_duration(task: Optional[GeminiGenTask]) -> float:
+        if not task or not task.created_at:
+            return 0.0
+        try:
+            return max(0.0, (datetime.utcnow() - task.created_at.replace(tzinfo=None)).total_seconds())
+        except Exception:
+            return 0.0
+
     async def _cache_artifacts(self, urls: List[str], *, kind: str, api_key_id: Optional[int], base_url: Optional[str], enabled: bool) -> List[str]:
         if not enabled:
             return []
@@ -357,9 +455,21 @@ class GeminiGenService:
             raise RuntimeError("GeminiGen integration is disabled")
         kind = str(manifest["kind"])
         job_id = f"geminigen-{datetime.utcnow().strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:8]}"
+        started_at = time.perf_counter()
+        request_log_id = await self._create_request_log(
+            api_key_id=api_key_id,
+            kind=kind,
+            public_model_id=public_model_id,
+            endpoint_type=str(manifest["endpoint_type"]),
+            prompt=prompt,
+            image_count=len(images or []),
+            options=options or {},
+            job_id=job_id,
+        )
         queued = GeminiGenTask(
             job_id=job_id,
             api_key_id=api_key_id,
+            request_log_id=request_log_id,
             public_model_id=public_model_id,
             kind=kind,
             endpoint_type=str(manifest["endpoint_type"]),
@@ -369,9 +479,34 @@ class GeminiGenService:
             request_payload=json.dumps({"images": len(images or []), "options": options or {}}, ensure_ascii=False),
         )
         await self.db.create_geminigen_task(queued)
-        return await self._start_queued_task(job_id, images=images or [], options=options or {})
+        try:
+            return await self._start_queued_task(
+                job_id,
+                images=images or [],
+                options=options or {},
+                request_log_id=request_log_id,
+                started_at=started_at,
+            )
+        except Exception as exc:
+            await self._update_request_log(
+                request_log_id,
+                status_text="failed",
+                progress=0,
+                status_code=502,
+                response={"status": "failed", "job_id": job_id, "error_message": str(exc)},
+                duration=time.perf_counter() - started_at,
+            )
+            raise
 
-    async def _start_queued_task(self, job_id: str, *, images: List[bytes], options: Dict[str, Any]) -> GeminiGenTask:
+    async def _start_queued_task(
+        self,
+        job_id: str,
+        *,
+        images: List[bytes],
+        options: Dict[str, Any],
+        request_log_id: Optional[int] = None,
+        started_at: Optional[float] = None,
+    ) -> GeminiGenTask:
         task = await self.db.get_geminigen_task(job_id)
         if not task:
             raise RuntimeError("GeminiGen task not found")
@@ -383,11 +518,33 @@ class GeminiGenService:
             account = await self.db.acquire_geminigen_account(task.kind)
             if account:
                 break
+            await self._update_request_log(
+                request_log_id,
+                status_text="geminigen_queued",
+                progress=0,
+                response={"status": "queued", "job_id": job_id, "reason": "waiting_for_account_slot"},
+                duration=time.perf_counter() - (started_at or time.perf_counter()),
+            )
             await asyncio.sleep(1.0)
         if not account:
             error = "GeminiGen queue timed out waiting for an available account slot"
             await self.db.update_geminigen_task(job_id, status="failed", error_message=error, completed_at=datetime.utcnow())
+            await self._update_request_log(
+                request_log_id,
+                status_text="failed",
+                progress=0,
+                status_code=504,
+                response={"status": "failed", "job_id": job_id, "error_message": error},
+                duration=time.perf_counter() - (started_at or time.perf_counter()),
+            )
             raise RuntimeError(error)
+        await self._update_request_log(
+            request_log_id,
+            status_text="geminigen_account_selected",
+            progress=1,
+            response={"status": "account_selected", "job_id": job_id, "account_id": account.id},
+            duration=time.perf_counter() - (started_at or time.perf_counter()),
+        )
         manifest = geminigen_manifest_entry(task.public_model_id)
         release_now = False
         try:
@@ -407,6 +564,19 @@ class GeminiGenService:
                 started_at=datetime.utcnow(),
                 request_payload=json.dumps(form, ensure_ascii=False),
             )
+            await self._update_request_log(
+                request_log_id,
+                status_text="geminigen_submitting",
+                progress=3,
+                response={
+                    "status": "submitting",
+                    "job_id": job_id,
+                    "account_id": account.id,
+                    "endpoint_type": task.endpoint_type,
+                    "form": form,
+                },
+                duration=time.perf_counter() - (started_at or time.perf_counter()),
+            )
             created = await self._post_generation(
                 account=account,
                 base_url=cfg.base_url,
@@ -420,11 +590,26 @@ class GeminiGenService:
                 response_payload=json.dumps(created, ensure_ascii=False),
                 progress=5,
             )
+            await self._update_request_log(
+                request_log_id,
+                status_text="geminigen_submitted",
+                progress=5,
+                response={"status": "submitted", "job_id": job_id, "upstream_uuid": upstream_uuid, "upstream": created},
+                duration=time.perf_counter() - (started_at or time.perf_counter()),
+            )
             return await self.db.get_geminigen_task(job_id) or task
         except Exception as exc:
             release_now = True
             await self.db.update_geminigen_task(job_id, status="failed", error_message=str(exc), completed_at=datetime.utcnow())
             await self.db.update_geminigen_account(account.id or 0, last_status="failed", last_error=str(exc))
+            await self._update_request_log(
+                request_log_id,
+                status_text="failed",
+                progress=task.progress,
+                status_code=502,
+                response={"status": "failed", "job_id": job_id, "error_message": str(exc)},
+                duration=time.perf_counter() - (started_at or time.perf_counter()),
+            )
             raise
         finally:
             if release_now:
@@ -452,6 +637,13 @@ class GeminiGenService:
             urls = self.extract_artifact_urls(payload, task.kind)
             completed = bool(urls) or any(x in status_text for x in ("complete", "success", "finished"))
             if completed:
+                await self._update_request_log(
+                    task.request_log_id,
+                    status_text="caching_video" if task.kind == "video" else "caching_image",
+                    progress=90,
+                    response={"status": "caching", "job_id": job_id, "raw_artifact_urls": urls},
+                    duration=self._task_duration(task),
+                )
                 cached = await self._cache_artifacts(urls, kind=task.kind, api_key_id=task.api_key_id, base_url=base_url, enabled=bool(cfg.cache_outputs))
                 await self.db.update_geminigen_task(
                     job_id,
@@ -462,16 +654,59 @@ class GeminiGenService:
                     response_payload=json.dumps(payload, ensure_ascii=False),
                     completed_at=datetime.utcnow(),
                 )
+                await self._update_request_log(
+                    task.request_log_id,
+                    status_text="completed",
+                    progress=100,
+                    status_code=200,
+                    response={
+                        "status": "completed",
+                        "job_id": job_id,
+                        "upstream_uuid": task.upstream_uuid,
+                        "raw_artifact_urls": urls,
+                        "cached_artifact_urls": cached,
+                        "result_urls": cached or urls,
+                    },
+                    duration=self._task_duration(task),
+                )
                 await self.db.release_geminigen_account(task.account_id, task.kind)
             elif failed:
                 error_text = str(payload.get("error") or payload.get("message") or status_text or "GeminiGen task failed")
                 await self.db.update_geminigen_task(job_id, status="failed", error_message=error_text, response_payload=json.dumps(payload, ensure_ascii=False), completed_at=datetime.utcnow())
+                await self._update_request_log(
+                    task.request_log_id,
+                    status_text="failed",
+                    progress=task.progress,
+                    status_code=502,
+                    response={"status": "failed", "job_id": job_id, "upstream_uuid": task.upstream_uuid, "error_message": error_text},
+                    duration=self._task_duration(task),
+                )
                 await self.db.release_geminigen_account(task.account_id, task.kind)
             else:
                 await self.db.update_geminigen_task(job_id, status="processing", progress=max(task.progress, 10), response_payload=json.dumps(payload, ensure_ascii=False))
+                await self._update_request_log(
+                    task.request_log_id,
+                    status_text="geminigen_polling",
+                    progress=max(task.progress, 10),
+                    response={
+                        "status": "polling",
+                        "job_id": job_id,
+                        "upstream_uuid": task.upstream_uuid,
+                        "upstream_status": status_text,
+                    },
+                    duration=self._task_duration(task),
+                )
             return await self.db.get_geminigen_task(job_id) or task
         except Exception as exc:
             await self.db.update_geminigen_task(job_id, status="failed", error_message=str(exc), completed_at=datetime.utcnow())
+            await self._update_request_log(
+                task.request_log_id,
+                status_text="failed",
+                progress=task.progress,
+                status_code=502,
+                response={"status": "failed", "job_id": job_id, "upstream_uuid": task.upstream_uuid, "error_message": str(exc)},
+                duration=self._task_duration(task),
+            )
             await self.db.release_geminigen_account(task.account_id, task.kind)
             return await self.db.get_geminigen_task(job_id) or task
 
@@ -488,6 +723,14 @@ class GeminiGenService:
             await asyncio.sleep(float(interval))
         await self.db.update_geminigen_task(job_id, status="failed", error_message=f"GeminiGen task did not finish within {timeout}s", completed_at=datetime.utcnow())
         if task:
+            await self._update_request_log(
+                task.request_log_id,
+                status_text="failed",
+                progress=task.progress,
+                status_code=504,
+                response={"status": "failed", "job_id": job_id, "error_message": f"GeminiGen task did not finish within {timeout}s"},
+                duration=self._task_duration(task),
+            )
             await self.db.release_geminigen_account(task.account_id, task.kind)
         return await self.db.get_geminigen_task(job_id) or task
 

@@ -392,6 +392,7 @@ class Database:
                 upstream_uuid TEXT,
                 account_id INTEGER,
                 api_key_id INTEGER,
+                request_log_id INTEGER,
                 public_model_id TEXT NOT NULL,
                 kind TEXT NOT NULL DEFAULT 'image',
                 endpoint_type TEXT NOT NULL DEFAULT 'imagen',
@@ -423,6 +424,12 @@ class Database:
         for column_name, column_type in account_columns:
             if not await self._column_exists(db, "geminigen_accounts", column_name):
                 await db.execute(f"ALTER TABLE geminigen_accounts ADD COLUMN {column_name} {column_type}")
+        task_columns = [
+            ("request_log_id", "INTEGER"),
+        ]
+        for column_name, column_type in task_columns:
+            if not await self._column_exists(db, "geminigen_tasks", column_name):
+                await db.execute(f"ALTER TABLE geminigen_tasks ADD COLUMN {column_name} {column_type}")
         await db.execute("INSERT OR IGNORE INTO geminigen_config (id) VALUES (1)")
 
     async def _ensure_config_rows(self, db, config_dict: dict = None):
@@ -2957,18 +2964,19 @@ class Database:
             cursor = await db.execute(
                 """
                 INSERT INTO geminigen_tasks (
-                    job_id, upstream_uuid, account_id, api_key_id, public_model_id, kind,
+                    job_id, upstream_uuid, account_id, api_key_id, request_log_id, public_model_id, kind,
                     endpoint_type, prompt, status, progress, raw_artifact_urls,
                     cached_artifact_urls, request_payload, response_payload, error_message,
                     started_at, completed_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     task.job_id,
                     task.upstream_uuid,
                     task.account_id,
                     task.api_key_id,
+                    task.request_log_id,
                     task.public_model_id,
                     task.kind,
                     task.endpoint_type,
@@ -2996,7 +3004,7 @@ class Database:
 
     async def update_geminigen_task(self, job_id: str, **kwargs) -> None:
         allowed = {
-            "upstream_uuid", "account_id", "api_key_id", "public_model_id", "kind",
+            "upstream_uuid", "account_id", "api_key_id", "request_log_id", "public_model_id", "kind",
             "endpoint_type", "prompt", "status", "progress", "raw_artifact_urls",
             "cached_artifact_urls", "request_payload", "response_payload",
             "error_message", "started_at", "completed_at",

@@ -15,6 +15,11 @@ export const STATUS_MAP: Record<string, string> = {
   video_polling: "Video polling",
   caching_image: "Caching image",
   caching_video: "Caching video",
+  geminigen_queued: "GeminiGen queued",
+  geminigen_account_selected: "GeminiGen account selected",
+  geminigen_submitting: "GeminiGen submitting",
+  geminigen_submitted: "GeminiGen submitted",
+  geminigen_polling: "GeminiGen polling",
   completed: "Completed",
   failed: "Failed",
   processing: "Processing",
@@ -28,15 +33,17 @@ export type UITone = "success" | "processing" | "error" | "neutral"
 /** Image / video / other for operation chip */
 export function getOperationKind(operation: string | null | undefined): "image" | "video" | "other" {
   const op = String(operation || "").trim()
-  if (op === "generate_image") return "image"
-  if (op === "generate_video") return "video"
+  if (op === "generate_image" || op === "geminigen_image") return "image"
+  if (op === "generate_video" || op === "geminigen_video") return "video"
   return "other"
 }
 
 export function operationLabel(kind: ReturnType<typeof getOperationKind>, raw: string | null | undefined): string {
+  const op = String(raw || "").trim()
+  if (op === "geminigen_image") return "GeminiGen Image"
+  if (op === "geminigen_video") return "GeminiGen Video"
   if (kind === "image") return "Image"
   if (kind === "video") return "Video"
-  const op = String(raw || "").trim()
   return op.length > 18 ? `${op.slice(0, 16)}…` : op || "—"
 }
 
@@ -96,8 +103,8 @@ export function formatOutcome(l: LogListItem): string {
   const code = Number(l.status_code)
   if (code === 200) {
     const op = String(l.operation || "").trim()
-    if (op === "generate_image") return "Image result returned"
-    if (op === "generate_video") return "Video result returned"
+    if (op === "generate_image" || op === "geminigen_image") return "Image result returned"
+    if (op === "generate_video" || op === "geminigen_video") return "Video result returned"
     return "Result returned"
   }
   if (code === 102) return "Processing"

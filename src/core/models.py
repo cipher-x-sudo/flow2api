@@ -453,6 +453,7 @@ class GeminiGenTask(BaseModel):
     upstream_uuid: Optional[str] = None
     account_id: Optional[int] = None
     api_key_id: Optional[int] = None
+    request_log_id: Optional[int] = None
     public_model_id: str
     kind: str = "image"
     endpoint_type: str = "imagen"

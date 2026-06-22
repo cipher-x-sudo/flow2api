@@ -68,8 +68,14 @@ export function extractLogPrimaryUrl(responseBodyObj: unknown): string | null {
   const o = responseBodyObj as Record<string, unknown>
   const data = o.data as unknown[] | undefined
   const assets = o.generated_assets as Record<string, unknown> | undefined
+  const resultUrls = o.result_urls as unknown[] | undefined
+  const cachedUrls = o.cached_artifact_urls as unknown[] | undefined
+  const rawUrls = o.raw_artifact_urls as unknown[] | undefined
   return (
     (typeof o.url === "string" ? o.url : null) ||
+    (typeof resultUrls?.[0] === "string" ? resultUrls[0] : null) ||
+    (typeof cachedUrls?.[0] === "string" ? cachedUrls[0] : null) ||
+    (typeof rawUrls?.[0] === "string" ? rawUrls[0] : null) ||
     (data?.[0] && typeof data[0] === "object" && data[0] !== null && typeof (data[0] as { url?: string }).url === "string"
       ? (data[0] as { url: string }).url
       : null) ||
