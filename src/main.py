@@ -357,6 +357,7 @@ async def lifespan(app: FastAPI):
                 debug_logger.log_error(f"[ST_SCHEDULER] task error: {e}")
 
     scheduled_st_only_refresh_handle = asyncio.create_task(scheduled_st_only_refresh_task())
+    resumed_geminigen_tasks = await geminigen_service.resume_active_tasks()
 
     print("OK Database initialized")
     print(f"OK Total tokens: {len(tokens)}")
@@ -370,6 +371,8 @@ async def lifespan(app: FastAPI):
     print("OK 429 auto-unban task started (runs every hour)")
     print("OK Scheduled token refresh task started")
     print("OK Scheduled ST-only refresh task started")
+    if resumed_geminigen_tasks:
+        print(f"OK GeminiGen active task resume started ({resumed_geminigen_tasks} task(s))")
     print(f"OK Server running on http://{config.server_host}:{config.server_port}")
     print("=" * 60)
 

@@ -2788,6 +2788,13 @@ async def create_chat_completion_async(
                 normalized,
                 api_key_id=auth_ctx.key_id,
             )
+            geminigen_service = _ensure_geminigen_service()
+            background_tasks.add_task(
+                geminigen_service.complete_task_in_background,
+                task.job_id,
+                api_key_id=auth_ctx.key_id,
+                base_url=request_base_url,
+            )
             return JSONResponse(
                 status_code=202,
                 content={

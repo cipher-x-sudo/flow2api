@@ -3185,6 +3185,22 @@ class Database:
             row = await cursor.fetchone()
             return self._coerce_geminigen_task_row(dict(row)) if row else None
 
+    async def list_active_geminigen_tasks(self, limit: int = 100) -> List[GeminiGenTask]:
+        async with self._connect() as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                """
+                SELECT * FROM geminigen_tasks
+                WHERE status IN ('queued', 'processing')
+                  AND TRIM(COALESCE(upstream_uuid, '')) != ''
+                ORDER BY created_at ASC
+                LIMIT ?
+                """,
+                (max(1, int(limit)),),
+            )
+            rows = await cursor.fetchall()
+            return [self._coerce_geminigen_task_row(dict(row)) for row in rows]
+
     async def update_geminigen_task(self, job_id: str, **kwargs) -> None:
         allowed = {
             "upstream_uuid", "account_id", "api_key_id", "request_log_id", "public_model_id", "kind",

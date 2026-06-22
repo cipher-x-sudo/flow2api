@@ -1088,6 +1088,28 @@ class GeminiGenService:
             await self.db.release_geminigen_account(task.account_id, task.kind)
         return await self.db.get_geminigen_task(job_id) or task
 
+    async def complete_task_in_background(self, job_id: str, *, api_key_id: Optional[int], base_url: Optional[str]) -> None:
+        try:
+            await self.wait_for_task(job_id, api_key_id=api_key_id, base_url=base_url)
+        except Exception as exc:
+            debug_logger.log_warning(f"GeminiGen background poll failed for {job_id}: {exc}")
+
+    async def resume_active_tasks(self, *, base_url: Optional[str] = None, limit: int = 100) -> int:
+        try:
+            tasks = await self.db.list_active_geminigen_tasks(limit=limit)
+        except Exception as exc:
+            debug_logger.log_warning(f"GeminiGen active task resume scan failed: {exc}")
+            return 0
+        for task in tasks:
+            asyncio.create_task(
+                self.complete_task_in_background(
+                    task.job_id,
+                    api_key_id=task.api_key_id,
+                    base_url=base_url,
+                )
+            )
+        return len(tasks)
+
     async def test_account(self, account_id: int) -> Dict[str, Any]:
         account = await self.db.get_geminigen_account(account_id)
         if not account:
