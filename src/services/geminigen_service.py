@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import json
 import mimetypes
+import re
 import time
 import uuid
 from datetime import datetime
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote, urlparse
@@ -25,6 +28,16 @@ from .file_cache import FileCache
 
 VIDEO_SUFFIXES = {".mp4", ".webm", ".mov", ".mkv", ".m4v"}
 GEMINIGEN_OPERATION_BY_KIND = {"image": "geminigen_image", "video": "geminigen_video"}
+GEMINIGEN_ORIGIN = "https://geminigen.ai"
+GEMINIGEN_ANTIBOT_SECRET_KEY = "45NPBH$&"
+GEMINIGEN_ANTIBOT_SECRET_SALT = "&vTQm0&u"
+GEMINIGEN_ANTIBOT_HEALTH_URL = "https://api.geminigen.ai/health"
+GEMINIGEN_GUARD_STABLE_ID = "MDYzYmU1NDQ1NDllN2IyZT"
+GEMINIGEN_DOM_FINGERPRINT_HEX = "250119fee98c924f2c0b975f6586ba302bfdf81d6586ba115666822156668221"
+GEMINIGEN_TIME_BUCKET_WINDOW_MS = 60_000
+GEMINIGEN_CHROME_MAJOR = 147
+GEMINIGEN_GUARD_STABLE_ID_LEN = 22
+GEMINIGEN_GUARD_VERSION_BYTE = 1
 
 
 class GeminiGenService:
@@ -34,6 +47,9 @@ class GeminiGenService:
         self.db = db
         self.file_cache = file_cache
         self.proxy_manager = proxy_manager
+        self._guard_skew_ms = 0
+        self._guard_skew_synced_at = 0.0
+        self._guard_skew_lock = asyncio.Lock()
 
     @staticmethod
     def is_geminigen_model(model: str) -> bool:
@@ -148,7 +164,7 @@ class GeminiGenService:
             response = await session.get(
                 f"{self._api_base_url(cfg.base_url)}{path}",
                 params={"window": clean_window},
-                headers=self._headers(account, path),
+                headers=await self._headers(account, path, method="get"),
                 timeout=30,
                 proxy=proxy,
                 impersonate="chrome120",
@@ -207,16 +223,10 @@ class GeminiGenService:
         }
 
     @staticmethod
-    def describe_credential(raw_cookie: str, bearer_token: str = "", guard_id: str = "") -> Dict[str, str]:
-        if not (raw_cookie or "").strip():
-            return {"status": "missing_cookie", "error": "GeminiGen cookie is required"}
-        status = "configured"
-        warning = ""
-        if not bearer_token.strip():
-            warning = "Bearer token not configured; cookie-only requests may fail if GeminiGen requires Authorization"
-        if not guard_id.strip():
-            warning = (warning + "; " if warning else "") + "guard_id not configured; protected endpoints may reject requests"
-        return {"status": status, "error": warning}
+    def describe_credential(raw_cookie: str = "", bearer_token: str = "", guard_id: str = "") -> Dict[str, str]:
+        if not (bearer_token or "").strip():
+            return {"status": "missing_bearer_token", "error": "GeminiGen bearer token is required"}
+        return {"status": "configured", "error": ""}
 
     async def _request_proxy(self) -> Optional[str]:
         if not self.proxy_manager:
@@ -239,42 +249,6 @@ class GeminiGenService:
         return base
 
     @staticmethod
-    def _cookie_header(raw_cookie: str) -> str:
-        raw = (raw_cookie or "").strip()
-        if not raw:
-            return ""
-        try:
-            parsed = json.loads(raw)
-        except Exception:
-            parsed = None
-        pairs: List[str] = []
-        if isinstance(parsed, list):
-            for item in parsed:
-                if not isinstance(item, dict):
-                    continue
-                name = str(item.get("name") or "").strip()
-                value = str(item.get("value") or "").strip()
-                if name:
-                    pairs.append(f"{name}={value}")
-        elif isinstance(parsed, dict):
-            if "name" in parsed and "value" in parsed:
-                name = str(parsed.get("name") or "").strip()
-                value = str(parsed.get("value") or "").strip()
-                if name:
-                    pairs.append(f"{name}={value}")
-            else:
-                for name, value in parsed.items():
-                    if str(name).strip():
-                        pairs.append(f"{str(name).strip()}={str(value).strip()}")
-        if pairs:
-            return "; ".join(pairs)
-        cleaned = raw.replace("\r", "\n")
-        lines = [line.strip().strip(";") for line in cleaned.split("\n") if line.strip()]
-        if len(lines) > 1:
-            return "; ".join(lines)
-        return raw.replace("\r", " ").replace("\n", " ").strip()
-
-    @staticmethod
     def _bearer_header(raw_token: str) -> str:
         token = (raw_token or "").strip()
         if token.lower().startswith("bearer "):
@@ -282,21 +256,124 @@ class GeminiGenService:
         return f"Bearer {token}" if token else ""
 
     @staticmethod
-    def _headers(account: GeminiGenAccount, path: str, *, multipart: bool = False) -> Dict[str, str]:
+    def _zg_hex(message: str) -> str:
+        return hashlib.sha256(message.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _rm_hex_pairs(hex_str: str) -> List[int]:
+        return [int(hex_str[i : i + 2], 16) for i in range(0, len(hex_str), 2)]
+
+    @staticmethod
+    def _u32_be(n: int) -> List[int]:
+        n = int(n) & 0xFFFFFFFF
+        return [(n >> 24) & 255, (n >> 16) & 255, (n >> 8) & 255, n & 255]
+
+    @staticmethod
+    def _base64url(payload: bytes) -> str:
+        return base64.b64encode(payload).decode("ascii").replace("+", "-").replace("/", "_").rstrip("=")
+
+    @staticmethod
+    def _normalize_dom_fp_hex(dom_fp_hex: str) -> str:
+        s = re.sub(r"[^0-9a-fA-F]", "", dom_fp_hex or "")
+        if len(s) < 64:
+            s = s.ljust(64, "0")
+        if len(s) > 64:
+            s = s[:64]
+        return s.lower()
+
+    @staticmethod
+    def _valid_stable_id(stable_id: str) -> bool:
+        return bool(
+            isinstance(stable_id, str)
+            and len(stable_id) == GEMINIGEN_GUARD_STABLE_ID_LEN
+            and re.fullmatch(r"[A-Za-z0-9_-]+", stable_id)
+        )
+
+    async def _sync_guard_skew_ms(self) -> int:
+        now = time.monotonic()
+        if now - self._guard_skew_synced_at < 300:
+            return self._guard_skew_ms
+        async with self._guard_skew_lock:
+            now = time.monotonic()
+            if now - self._guard_skew_synced_at < 300:
+                return self._guard_skew_ms
+            t0 = int(time.time() * 1000)
+            proxy = await self._request_proxy()
+            async with AsyncSession() as session:
+                response = await session.get(
+                    GEMINIGEN_ANTIBOT_HEALTH_URL,
+                    headers={
+                        "Accept": "*/*",
+                        "Origin": GEMINIGEN_ORIGIN,
+                        "Referer": f"{GEMINIGEN_ORIGIN}/",
+                    },
+                    timeout=30,
+                    proxy=proxy,
+                    impersonate="chrome120",
+                )
+            t1 = int(time.time() * 1000)
+            server_time = response.headers.get("X-Server-Time") or response.headers.get("x-server-time")
+            if server_time and str(server_time).strip():
+                server_ms = int(str(server_time).strip())
+            else:
+                date_header = response.headers.get("Date") or response.headers.get("date")
+                if not date_header:
+                    self._guard_skew_ms = 0
+                    self._guard_skew_synced_at = now
+                    return 0
+                server_ms = int(parsedate_to_datetime(date_header).timestamp() * 1000)
+            self._guard_skew_ms = int(server_ms + ((t1 - t0) // 2) - t1)
+            self._guard_skew_synced_at = time.monotonic()
+            return self._guard_skew_ms
+
+    async def _compute_x_guard_id(self, *, path: str, method: str) -> str:
+        stable_id = GEMINIGEN_GUARD_STABLE_ID
+        if not self._valid_stable_id(stable_id):
+            raise RuntimeError("Invalid GeminiGen backend guard stable id")
+        skew_ms = await self._sync_guard_skew_ms()
+        bucket = (int(time.time() * 1000) + int(skew_ms)) // GEMINIGEN_TIME_BUCKET_WINDOW_MS
+        dom_norm = self._normalize_dom_fp_hex(GEMINIGEN_DOM_FINGERPRINT_HEX)
+        key_material = GEMINIGEN_ANTIBOT_SECRET_KEY
+        u_prefix = self._zg_hex(f"{key_material}:{stable_id}")[:32]
+        method_upper = (method or "get").upper()
+        inner = self._zg_hex(f"{path}:{method_upper}:{u_prefix}:{bucket}:{key_material}")
+        parts: List[int] = [GEMINIGEN_GUARD_VERSION_BYTE]
+        parts.extend(self._rm_hex_pairs(u_prefix))
+        parts.extend(self._u32_be(bucket))
+        parts.extend(self._rm_hex_pairs(inner))
+        parts.extend(self._rm_hex_pairs(dom_norm))
+        return self._base64url(bytes(parts))
+
+    async def _headers(self, account: GeminiGenAccount, path: str, *, method: str = "get", multipart: bool = False) -> Dict[str, str]:
+        ua = (
+            f"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            f"(KHTML, like Gecko) Chrome/{GEMINIGEN_CHROME_MAJOR}.0.0.0 Safari/537.36"
+        )
+        sec_ch_ua = (
+            f'"Google Chrome";v="{GEMINIGEN_CHROME_MAJOR}", "Not.A/Brand";v="8", '
+            f'"Chromium";v="{GEMINIGEN_CHROME_MAJOR}"'
+        )
         headers = {
             "Accept": "application/json, text/plain, */*",
-            "Origin": "https://geminigen.ai",
-            "Referer": "https://geminigen.ai/",
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36",
+            "Accept-Encoding": "gzip, deflate, br",
+            "Accept-Language": "en-GB,en;q=0.9,ur-PK;q=0.8,ur;q=0.7,en-US;q=0.6",
+            "Cache-Control": "no-cache",
+            "Origin": GEMINIGEN_ORIGIN,
+            "Pragma": "no-cache",
+            "Priority": "u=1, i",
+            "Referer": f"{GEMINIGEN_ORIGIN}/",
+            "Sec-CH-UA": sec_ch_ua,
+            "Sec-CH-UA-Mobile": "?0",
+            "Sec-CH-UA-Platform": '"Windows"',
+            "Sec-Fetch-Dest": "empty",
+            "Sec-Fetch-Mode": "cors",
+            "Sec-Fetch-Site": "same-site",
+            "User-Agent": ua,
+            "x-guard-id": await self._compute_x_guard_id(path=path, method=method),
         }
-        cookie = GeminiGenService._cookie_header(account.raw_cookie)
-        if cookie:
-            headers["Cookie"] = cookie
         bearer = GeminiGenService._bearer_header(account.bearer_token)
         if bearer:
             headers["Authorization"] = bearer
-        if account.guard_id:
-            headers["x-guard-id"] = account.guard_id
         if not multipart:
             headers["Content-Type"] = "application/json"
         return headers
@@ -488,9 +565,7 @@ class GeminiGenService:
         endpoint_type = options["endpoint_type"]
         merged = dict(options.get("options") or {})
         merged.update({k: v for k, v in (extra_options or {}).items() if v is not None})
-        form: Dict[str, Any] = {"prompt": prompt}
-        if account.turnstile_token:
-            form["turnstile_token"] = account.turnstile_token
+        form: Dict[str, Any] = {"prompt": prompt, "turnstile_token": "skip"}
 
         if endpoint_type == "imagen":
             form.update(
@@ -567,7 +642,7 @@ class GeminiGenService:
             async with AsyncSession() as session:
                 response = await session.post(
                     url,
-                    headers=self._headers(account, path, multipart=True),
+                    headers=await self._headers(account, path, method="post", multipart=True),
                     multipart=multipart,
                     timeout=120,
                     proxy=proxy,
@@ -590,7 +665,7 @@ class GeminiGenService:
         async with AsyncSession() as session:
             response = await session.get(
                 f"{self._api_base_url(base_url)}{path}",
-                headers=self._headers(account, path),
+                headers=await self._headers(account, path, method="get"),
                 timeout=60,
                 proxy=proxy,
                 impersonate="chrome120",
@@ -906,7 +981,7 @@ class GeminiGenService:
             async with AsyncSession() as session:
                 response = await session.get(
                     f"{self._api_base_url(cfg.base_url)}{path}",
-                    headers=self._headers(account, path),
+                    headers=await self._headers(account, path, method="get"),
                     timeout=30,
                     proxy=proxy,
                     impersonate="chrome120",

@@ -9,7 +9,6 @@ import { Input } from "../ui/input"
 import { Label } from "../ui/label"
 import { Switch } from "../ui/switch"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../ui/table"
-import { Textarea } from "../ui/textarea"
 import { toast } from "sonner"
 import { CheckCircle2, Edit3, Plus, RefreshCw, Save, Trash2 } from "lucide-react"
 
@@ -26,11 +25,8 @@ type GeminiGenConfig = {
 type GeminiGenAccount = {
   id: number
   label: string
-  raw_cookie: string
-  raw_cookie_preview: string
   bearer_token: string
-  guard_id: string
-  turnstile_token: string
+  bearer_token_preview: string
   is_active: boolean
   image_concurrency: number
   video_concurrency: number
@@ -88,10 +84,7 @@ type GeminiGenStatusResponse = {
 type AccountDraft = {
   id?: number
   label: string
-  raw_cookie: string
   bearer_token: string
-  guard_id: string
-  turnstile_token: string
   is_active: boolean
   image_concurrency: string
   video_concurrency: string
@@ -109,10 +102,7 @@ const DEFAULT_CONFIG: GeminiGenConfig = {
 
 const EMPTY_ACCOUNT: AccountDraft = {
   label: "",
-  raw_cookie: "",
   bearer_token: "",
-  guard_id: "",
-  turnstile_token: "",
   is_active: true,
   image_concurrency: "5",
   video_concurrency: "5",
@@ -187,10 +177,7 @@ export function GeminiGenSettings({ active }: { active: boolean }) {
     setDraft({
       id: account.id,
       label: account.label,
-      raw_cookie: account.raw_cookie,
-      bearer_token: account.bearer_token,
-      guard_id: account.guard_id,
-      turnstile_token: account.turnstile_token,
+      bearer_token: "",
       is_active: account.is_active,
       image_concurrency: String(account.image_concurrency ?? 5),
       video_concurrency: String(account.video_concurrency ?? 5),
@@ -199,18 +186,15 @@ export function GeminiGenSettings({ active }: { active: boolean }) {
   }
 
   const saveAccount = async () => {
-    if (!draft.raw_cookie.trim()) {
-      toast.error("Cookie is required")
+    if (!draft.id && !draft.bearer_token.trim()) {
+      toast.error("Bearer token is required")
       return
     }
     setSaving(true)
     try {
       const payload = {
         label: draft.label.trim() || "GeminiGen account",
-        raw_cookie: draft.raw_cookie.trim(),
         bearer_token: draft.bearer_token.trim(),
-        guard_id: draft.guard_id.trim(),
-        turnstile_token: draft.turnstile_token.trim(),
         is_active: draft.is_active,
         image_concurrency: Number(draft.image_concurrency) || 5,
         video_concurrency: Number(draft.video_concurrency) || 5,
@@ -422,7 +406,7 @@ export function GeminiGenSettings({ active }: { active: boolean }) {
                 <TableHead>Status</TableHead>
                 <TableHead>Image</TableHead>
                 <TableHead>Video</TableHead>
-                <TableHead>Cookie</TableHead>
+                <TableHead>Token</TableHead>
                 <TableHead className="text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
@@ -436,7 +420,7 @@ export function GeminiGenSettings({ active }: { active: boolean }) {
                   <TableCell>{account.is_active ? <Badge>enabled</Badge> : <Badge variant="outline">disabled</Badge>}</TableCell>
                   <TableCell className="tabular-nums">{account.image_in_flight}/{account.image_concurrency}</TableCell>
                   <TableCell className="tabular-nums">{account.video_in_flight}/{account.video_concurrency}</TableCell>
-                  <TableCell className="font-mono text-xs">{account.raw_cookie_preview || "***"}</TableCell>
+                  <TableCell className="font-mono text-xs">{account.bearer_token_preview || "***"}</TableCell>
                   <TableCell>
                     <div className="flex justify-end gap-2">
                       <Button size="icon" variant="ghost" onClick={() => testAccount(account)} title="Test">
@@ -489,22 +473,8 @@ export function GeminiGenSettings({ active }: { active: boolean }) {
               </div>
             </div>
             <div className="space-y-2">
-              <Label>Cookie *</Label>
-              <Textarea className="font-mono text-xs min-h-24" value={draft.raw_cookie} onChange={(e) => setDraft((d) => ({ ...d, raw_cookie: e.target.value }))} />
-            </div>
-            <div className="space-y-2">
-              <Label>Bearer token</Label>
-              <Input className="font-mono text-xs" value={draft.bearer_token} onChange={(e) => setDraft((d) => ({ ...d, bearer_token: e.target.value }))} />
-            </div>
-            <div className="grid gap-4 md:grid-cols-2">
-              <div className="space-y-2">
-                <Label>Guard ID</Label>
-                <Input className="font-mono text-xs" value={draft.guard_id} onChange={(e) => setDraft((d) => ({ ...d, guard_id: e.target.value }))} />
-              </div>
-              <div className="space-y-2">
-                <Label>Turnstile token</Label>
-                <Input className="font-mono text-xs" value={draft.turnstile_token} onChange={(e) => setDraft((d) => ({ ...d, turnstile_token: e.target.value }))} />
-              </div>
+              <Label>Bearer token {draft.id ? "(leave blank to keep current)" : "*"}</Label>
+              <Input className="font-mono text-xs" type="password" value={draft.bearer_token} onChange={(e) => setDraft((d) => ({ ...d, bearer_token: e.target.value }))} />
             </div>
           </div>
           <DialogFooter>

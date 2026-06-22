@@ -1971,13 +1971,13 @@ def _geminigen_account_payload(account) -> Dict[str, Any]:
     return {
         "id": account.id,
         "label": account.label,
-        "raw_cookie": account.raw_cookie,
+        "raw_cookie": "",
         "raw_cookie_preview": _mask_secret(account.raw_cookie),
-        "bearer_token": account.bearer_token,
+        "bearer_token": "",
         "bearer_token_preview": _mask_secret(account.bearer_token),
-        "guard_id": account.guard_id,
+        "guard_id": "",
         "guard_id_preview": _mask_secret(account.guard_id),
-        "turnstile_token": account.turnstile_token,
+        "turnstile_token": "",
         "turnstile_token_preview": _mask_secret(account.turnstile_token),
         "is_active": bool(account.is_active),
         "image_concurrency": account.image_concurrency,
@@ -2370,14 +2370,14 @@ async def create_geminigen_account(
     request: GeminiGenAccountRequest,
     token: str = Depends(verify_admin_token),
 ):
-    if not request.raw_cookie.strip():
-        raise HTTPException(status_code=400, detail="GeminiGen cookie is required")
+    if not request.bearer_token.strip():
+        raise HTTPException(status_code=400, detail="GeminiGen bearer token is required")
     meta = GeminiGenService.describe_credential(request.raw_cookie, request.bearer_token, request.guard_id)
     account_id = await db.create_geminigen_account(
         label=request.label.strip() or "GeminiGen account",
-        raw_cookie=request.raw_cookie.strip(),
+        raw_cookie="",
         bearer_token=request.bearer_token.strip(),
-        guard_id=request.guard_id.strip(),
+        guard_id="",
         turnstile_token=request.turnstile_token.strip(),
         is_active=request.is_active,
         image_concurrency=max(-1, int(request.image_concurrency or 5)),
@@ -2402,18 +2402,24 @@ async def update_geminigen_account(
     for field in ("label", "raw_cookie", "bearer_token", "guard_id", "turnstile_token"):
         value = getattr(request, field)
         if value is not None:
-            updates[field] = value.strip()
+            stripped = value.strip()
+            if field in {"raw_cookie", "guard_id"}:
+                updates[field] = ""
+            elif field == "bearer_token" and not stripped:
+                continue
+            else:
+                updates[field] = stripped
     if request.is_active is not None:
         updates["is_active"] = request.is_active
     if request.image_concurrency is not None:
         updates["image_concurrency"] = max(-1, int(request.image_concurrency))
     if request.video_concurrency is not None:
         updates["video_concurrency"] = max(-1, int(request.video_concurrency))
-    if any(key in updates for key in ("raw_cookie", "bearer_token", "guard_id")):
+    if "bearer_token" in updates:
         meta = GeminiGenService.describe_credential(
-            updates.get("raw_cookie", account.raw_cookie),
+            "",
             updates.get("bearer_token", account.bearer_token),
-            updates.get("guard_id", account.guard_id),
+            "",
         )
         updates["last_status"] = str(meta.get("status") or "")
         updates["last_error"] = str(meta.get("error") or "")
