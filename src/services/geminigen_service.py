@@ -72,6 +72,14 @@ class GeminiGenService:
         return None
 
     @staticmethod
+    def _api_base_url(base_url: str) -> str:
+        base = (base_url or "").strip().rstrip("/") or "https://api.geminigen.ai"
+        parsed = urlparse(base)
+        if parsed.netloc == "geminigen.ai":
+            return "https://api.geminigen.ai"
+        return base
+
+    @staticmethod
     def _cookie_header(raw_cookie: str) -> str:
         raw = (raw_cookie or "").strip()
         if not raw:
@@ -290,7 +298,7 @@ class GeminiGenService:
 
     async def _post_generation(self, *, account: GeminiGenAccount, base_url: str, endpoint_type: str, form: Dict[str, Any]) -> Dict[str, Any]:
         path = self._endpoint_path(endpoint_type)
-        url = f"{base_url.rstrip('/')}{path}"
+        url = f"{self._api_base_url(base_url)}{path}"
         proxy = await self._request_proxy()
         files: List[Any] = []
         for key, value in form.items():
@@ -322,7 +330,7 @@ class GeminiGenService:
         proxy = await self._request_proxy()
         async with AsyncSession() as session:
             response = await session.get(
-                f"{base_url.rstrip('/')}{path}",
+                f"{self._api_base_url(base_url)}{path}",
                 headers=self._headers(account, path),
                 timeout=60,
                 proxy=proxy,
@@ -490,16 +498,23 @@ class GeminiGenService:
         cfg = await self.db.get_geminigen_config()
         try:
             proxy = await self._request_proxy()
+            path = "/api/me"
             async with AsyncSession() as session:
                 response = await session.get(
-                    f"{cfg.base_url.rstrip('/')}/api/me",
-                    headers=self._headers(account, "/api/me"),
+                    f"{self._api_base_url(cfg.base_url)}{path}",
+                    headers=self._headers(account, path),
                     timeout=30,
                     proxy=proxy,
                     impersonate="chrome120",
                 )
             if response.status_code >= 400:
                 raise RuntimeError(f"HTTP {response.status_code}: {response.text[:300]}")
+            try:
+                payload = response.json()
+            except Exception as exc:
+                raise RuntimeError("GeminiGen /api/me did not return JSON") from exc
+            if not isinstance(payload, dict) or not payload.get("email"):
+                raise RuntimeError("GeminiGen /api/me did not return an authenticated user")
             status = "healthy"
             error = ""
         except Exception as exc:

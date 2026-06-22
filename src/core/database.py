@@ -356,7 +356,7 @@ class Database:
             CREATE TABLE IF NOT EXISTS geminigen_config (
                 id INTEGER PRIMARY KEY DEFAULT 1,
                 enabled BOOLEAN DEFAULT 0,
-                base_url TEXT DEFAULT 'https://geminigen.ai',
+                base_url TEXT DEFAULT 'https://api.geminigen.ai',
                 poll_interval_image_sec REAL DEFAULT 3.0,
                 poll_interval_video_sec REAL DEFAULT 12.0,
                 timeout_image_sec REAL DEFAULT 600.0,
@@ -2779,7 +2779,7 @@ class Database:
         current = await self.get_geminigen_config()
         values = {
             "enabled": int(current.enabled if enabled is None else bool(enabled)),
-            "base_url": (base_url if base_url is not None else current.base_url).strip().rstrip("/") or "https://geminigen.ai",
+            "base_url": (base_url if base_url is not None else current.base_url).strip().rstrip("/") or "https://api.geminigen.ai",
             "poll_interval_image_sec": max(1.0, float(current.poll_interval_image_sec if poll_interval_image_sec is None else poll_interval_image_sec)),
             "poll_interval_video_sec": max(2.0, float(current.poll_interval_video_sec if poll_interval_video_sec is None else poll_interval_video_sec)),
             "timeout_image_sec": max(30.0, float(current.timeout_image_sec if timeout_image_sec is None else timeout_image_sec)),

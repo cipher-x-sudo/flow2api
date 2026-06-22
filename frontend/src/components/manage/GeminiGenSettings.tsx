@@ -65,7 +65,7 @@ type AccountDraft = {
 
 const DEFAULT_CONFIG: GeminiGenConfig = {
   enabled: false,
-  base_url: "https://geminigen.ai",
+  base_url: "https://api.geminigen.ai",
   poll_interval_image_sec: 3,
   poll_interval_video_sec: 12,
   timeout_image_sec: 600,
