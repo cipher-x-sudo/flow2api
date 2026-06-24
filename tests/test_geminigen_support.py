@@ -15,6 +15,7 @@ from fastapi import HTTPException
 from src.core.database import Database
 from src.core.config import config
 from src.services.cloning_metadata_service import (
+    _cloning_remaining_timeout,
     _ensure_meaningful_image_prompt,
     _normalize_image_prompt,
 )
@@ -23,7 +24,7 @@ from src.services.geminigen_service import (
     GeminiGenService,
     GeminiGenUpstreamError,
 )
-from src.services.llm_provider_chain import extract_non_empty_json_object
+from src.services.llm_provider_chain import LlmProviderChain, extract_non_empty_json_object
 from src.services.runway_service import RunwayService
 from src.api import routes
 from src.core.geminigen_manifest import GEMINIGEN_MODEL_BY_ID, GEMINIGEN_MODEL_MANIFEST
@@ -40,7 +41,7 @@ def test_blank_cloning_prompt_is_rejected():
     try:
         _ensure_meaningful_image_prompt(blank)
     except HTTPException as exc:
-        assert exc.status_code == 502
+        assert exc.status_code == 422
         assert "blank cloning prompt" in str(exc.detail)
     else:
         raise AssertionError("blank cloning prompt was accepted")
@@ -56,7 +57,7 @@ def test_empty_provider_json_content_is_rejected():
     try:
         extract_non_empty_json_object("", "Gemini")
     except HTTPException as exc:
-        assert exc.status_code == 500
+        assert exc.status_code == 422
         assert "Gemini returned empty JSON content" in str(exc.detail)
     else:
         raise AssertionError("empty provider JSON content was accepted")
@@ -64,6 +65,66 @@ def test_empty_provider_json_content_is_rejected():
 
 def test_non_empty_provider_json_content_still_parses():
     assert extract_non_empty_json_object('{"scene":"x"}') == {"scene": "x"}
+
+
+def test_non_retryable_model_output_does_not_try_fallback_model():
+    class Chain(LlmProviderChain):
+        def __init__(self):
+            self.calls = []
+
+        async def _invoke_gemini(self, model, *args, **kwargs):
+            self.calls.append(model)
+            raise HTTPException(status_code=422, detail="Gemini returned empty JSON content")
+
+    chain = Chain()
+    try:
+        asyncio.run(
+            chain.invoke_model_json(
+                provider="gemini_native",
+                model="primary-model",
+                fallback_models=["fallback-model"],
+                prompt_text="prompt",
+            )
+        )
+    except HTTPException as exc:
+        assert exc.status_code == 422
+    else:
+        raise AssertionError("non-retryable model output was accepted")
+    assert chain.calls == ["primary-model"]
+
+
+def test_retryable_model_error_tries_fallback_model():
+    class Chain(LlmProviderChain):
+        def __init__(self):
+            self.calls = []
+
+        async def _invoke_gemini(self, model, *args, **kwargs):
+            self.calls.append(model)
+            if model == "primary-model":
+                raise HTTPException(status_code=502, detail="temporary upstream failure")
+            return {"scene": "fallback worked"}
+
+    chain = Chain()
+    out = asyncio.run(
+        chain.invoke_model_json(
+            provider="gemini_native",
+            model="primary-model",
+            fallback_models=["fallback-model"],
+            prompt_text="prompt",
+        )
+    )
+    assert out == {"scene": "fallback worked"}
+    assert chain.calls == ["primary-model", "fallback-model"]
+
+
+def test_cloning_deadline_returns_controlled_timeout_before_proxy_limit():
+    try:
+        _cloning_remaining_timeout(time.monotonic() - 1, 60.0)
+    except HTTPException as exc:
+        assert exc.status_code == 504
+        assert "deadline exceeded" in str(exc.detail)
+    else:
+        raise AssertionError("expired cloning deadline did not fail")
 
 
 def test_extract_artifact_urls_prefers_final_download_url_over_preview():

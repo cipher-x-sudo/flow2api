@@ -43,6 +43,11 @@ export function getOperationKind(operation: string | null | undefined): "image" 
 
 export function operationLabel(kind: ReturnType<typeof getOperationKind>, raw: string | null | undefined): string {
   const op = String(raw || "").trim()
+  if (op === "adobe:cloning_prompts") return "Adobe Cloning Prompts"
+  if (op === "adobe:cloning_video_prompt") return "Adobe Cloning Video"
+  if (op === "adobe:metadata") return "Adobe Metadata"
+  if (op === "adobe:tracker_contributor") return "Adobe Tracker Contributor"
+  if (op === "adobe:tracker_keyword") return "Adobe Tracker Keyword"
   if (op === "geminigen_image") return "GeminiGen Image"
   if (op === "geminigen_video") return "GeminiGen Video"
   if (kind === "image") return "Image"
@@ -54,7 +59,7 @@ export function operationLabel(kind: ReturnType<typeof getOperationKind>, raw: s
 export function statusTone(l: LogListItem): UITone {
   const code = l.status_code
   const st = (l.status_text || "").trim().toLowerCase()
-  if (st === "failed") return "error"
+  if (st === "failed" || st.startsWith("http_")) return "error"
   if (code != null && code >= 400) return "error"
   if (code === 102) return "processing"
   if (code === 200) return "success"
@@ -83,6 +88,7 @@ export function outcomeTone(l: LogListItem): UITone {
 
 export function formatLogStatus(l: LogListItem): string {
   const st = (l.status_text || "").trim()
+  if (st === "failed" || /^http_\d+$/i.test(st)) return "Failed"
   if (st) return STATUS_MAP[st] || st.replace(/_/g, " ")
   if (l.status_code === 102) return "Processing"
   if (l.status_code === 200) return "Completed"

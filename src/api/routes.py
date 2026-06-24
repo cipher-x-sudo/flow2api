@@ -3,6 +3,7 @@
 from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Set, Tuple
+import asyncio
 import base64
 import hashlib
 import json
@@ -252,6 +253,10 @@ async def _logged_managed_adobe_call(
         status_code = he.status_code
         response_payload = {"detail": he.detail}
         raise
+    except asyncio.CancelledError:
+        status_code = 499
+        response_payload = {"detail": "Client disconnected before the Adobe request completed"}
+        raise
     except Exception as exc:
         status_code = 500
         response_payload = {"error": str(exc)}
@@ -260,7 +265,7 @@ async def _logged_managed_adobe_call(
         duration = max(0.0, time.perf_counter() - started)
         if auth_ctx.key_id is not None:
             try:
-                status_text = "completed" if status_code == 200 else f"http_{status_code}"
+                status_text = "completed" if status_code == 200 else "failed"
                 await ldb.insert_managed_route_request_log(
                     api_key_id=int(auth_ctx.key_id),
                     operation=operation,
