@@ -195,6 +195,7 @@ class TestMetadataImageMimeHandling(unittest.IsolatedAsyncioTestCase):
         prompt = llm.invoke_model_json.await_args.kwargs["prompt_text"]
         self.assertIn("isolated on transparent background", prompt)
         self.assertIn("Do not say solid black background", prompt)
+        self.assertIn("Transparent alpha may appear black, dark, white, gray, or checkerboard", prompt)
 
     async def test_transparent_background_prompt_without_dna_no_bg_workflow(self):
         png_bytes = b"\x89PNG\r\n\x1a\nfake"
@@ -227,6 +228,7 @@ class TestMetadataImageMimeHandling(unittest.IsolatedAsyncioTestCase):
         prompt = llm.invoke_model_json.await_args.kwargs["prompt_text"]
         self.assertIn("isolated on transparent background", prompt)
         self.assertIn("Do not say solid black background", prompt)
+        self.assertIn("Transparent alpha may appear black, dark, white, gray, or checkerboard", prompt)
 
 
 class TestMetadataProviderRouting(unittest.IsolatedAsyncioTestCase):

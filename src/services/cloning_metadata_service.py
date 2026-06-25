@@ -381,7 +381,10 @@ class CloningMetadataService:
             else ""
         )
         bg_line = (
-            "When the asset is clearly subject on transparency (cutout), you may use isolated on transparent background or cutout wording in title. Do not say solid black background, black background, white background, or any other background color unless those pixels are truly visible in the attached image."
+            "Transparent-background contract: this request is for a transparent PNG/cutout asset. "
+            "Transparent alpha may appear black, dark, white, gray, or checkerboard in some viewers or provider previews; that viewer surface is NOT part of the asset. "
+            "Describe the asset as isolated on transparent background, transparent background, cutout, or isolated transparent PNG. "
+            "Do not say solid black background, black background, dark background, white background, gray background, studio background, or any other background color."
             if bool(meta.get("transparentBackground")) or dna_no_bg
             else "Do not suggest transparent cutout language unless the image is clearly transparent."
         )

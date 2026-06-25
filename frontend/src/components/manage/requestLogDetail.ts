@@ -166,8 +166,8 @@ export function formatLogPayload(raw: string | null | undefined): string {
       parsed,
       (_, value: unknown) => {
         if (typeof value !== "string") return value
-        if (value.length <= 4096) return value
         if (/^data:(image|video)\//i.test(value)) return `[data URL omitted, length=${value.length}]`
+        if (value.length <= 4096) return value
         const sample = value.slice(0, 256)
         if (/^[A-Za-z0-9+/=\r\n]+$/.test(sample)) return `[large base64 omitted, length=${value.length}]`
         return `${value.slice(0, 800)}... [truncated, length=${value.length}]`
