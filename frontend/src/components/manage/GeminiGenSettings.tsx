@@ -19,6 +19,8 @@ type GeminiGenConfig = {
   poll_interval_video_sec: number
   timeout_image_sec: number
   timeout_video_sec: number
+  global_image_concurrency: number
+  global_video_concurrency: number
   cache_outputs: boolean
 }
 
@@ -100,6 +102,8 @@ const DEFAULT_CONFIG: GeminiGenConfig = {
   poll_interval_video_sec: 12,
   timeout_image_sec: 600,
   timeout_video_sec: 1800,
+  global_image_concurrency: 5,
+  global_video_concurrency: 5,
   cache_outputs: true,
 }
 
@@ -417,6 +421,14 @@ export function GeminiGenSettings({ active }: { active: boolean }) {
           <div className="space-y-2">
             <Label>Video timeout seconds</Label>
             <Input type="number" value={config.timeout_video_sec} onChange={(e) => setConfig((c) => ({ ...c, timeout_video_sec: Number(e.target.value) || 1800 }))} />
+          </div>
+          <div className="space-y-2">
+            <Label>Global image concurrency</Label>
+            <Input type="number" value={config.global_image_concurrency} onChange={(e) => setConfig((c) => ({ ...c, global_image_concurrency: Number(e.target.value) || 5 }))} />
+          </div>
+          <div className="space-y-2">
+            <Label>Global video concurrency</Label>
+            <Input type="number" value={config.global_video_concurrency} onChange={(e) => setConfig((c) => ({ ...c, global_video_concurrency: Number(e.target.value) || 5 }))} />
           </div>
         </CardContent>
       </Card>

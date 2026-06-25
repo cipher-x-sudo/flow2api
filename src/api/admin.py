@@ -883,6 +883,8 @@ class GeminiGenConfigUpdateRequest(BaseModel):
     poll_interval_video_sec: Optional[float] = None
     timeout_image_sec: Optional[float] = None
     timeout_video_sec: Optional[float] = None
+    global_image_concurrency: Optional[int] = None
+    global_video_concurrency: Optional[int] = None
     cache_outputs: Optional[bool] = None
 
 
@@ -2300,6 +2302,8 @@ async def get_geminigen_admin_config(token: str = Depends(verify_admin_token)):
             "poll_interval_video_sec": cfg.poll_interval_video_sec,
             "timeout_image_sec": cfg.timeout_image_sec,
             "timeout_video_sec": cfg.timeout_video_sec,
+            "global_image_concurrency": cfg.global_image_concurrency,
+            "global_video_concurrency": cfg.global_video_concurrency,
             "cache_outputs": bool(cfg.cache_outputs),
         },
         "accounts": [_geminigen_account_payload(account) for account in accounts],
@@ -2319,6 +2323,8 @@ async def update_geminigen_admin_config(
         poll_interval_video_sec=request.poll_interval_video_sec,
         timeout_image_sec=request.timeout_image_sec,
         timeout_video_sec=request.timeout_video_sec,
+        global_image_concurrency=request.global_image_concurrency,
+        global_video_concurrency=request.global_video_concurrency,
         cache_outputs=request.cache_outputs,
     )
     return {
@@ -2330,6 +2336,8 @@ async def update_geminigen_admin_config(
             "poll_interval_video_sec": cfg.poll_interval_video_sec,
             "timeout_image_sec": cfg.timeout_image_sec,
             "timeout_video_sec": cfg.timeout_video_sec,
+            "global_image_concurrency": cfg.global_image_concurrency,
+            "global_video_concurrency": cfg.global_video_concurrency,
             "cache_outputs": bool(cfg.cache_outputs),
         },
     }

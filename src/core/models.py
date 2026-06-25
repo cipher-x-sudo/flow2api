@@ -420,6 +420,8 @@ class GeminiGenConfig(BaseModel):
     poll_interval_video_sec: float = 12.0
     timeout_image_sec: float = 600.0
     timeout_video_sec: float = 1800.0
+    global_image_concurrency: int = 5
+    global_video_concurrency: int = 5
     cache_outputs: bool = True
     updated_at: Optional[datetime] = None
 

@@ -490,6 +490,22 @@ def test_geminigen_capacity_error_is_retryable_and_sanitized():
     assert "/api/generate_image" not in str(error)
 
 
+def test_geminigen_message_only_capacity_error_is_retryable():
+    body = json.dumps(
+        {
+            "detail": {
+                "error_message": "You have reached the maximum number of 5 concurrent image generations allowed by your plan. Please wait for one to finish before starting another.",
+            }
+        }
+    )
+
+    error = GeminiGenService._extract_upstream_error(400, body)
+
+    assert error.retryable_capacity is True
+    assert error.error_code is None
+    assert "capacity is full" in str(error)
+
+
 def test_geminigen_non_capacity_400_is_not_retryable():
     body = json.dumps({"detail": {"error_code": "BAD_PROMPT", "error_message": "Prompt is invalid"}})
 
@@ -498,6 +514,39 @@ def test_geminigen_non_capacity_400_is_not_retryable():
     assert error.retryable_capacity is False
     assert error.error_code == "BAD_PROMPT"
     assert "Prompt is invalid" in str(error)
+
+
+def test_geminigen_global_image_concurrency_queues_after_five_slots():
+    async def run():
+        tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        tmp.close()
+        db = Database(tmp.name)
+        try:
+            await db.init_db()
+            await db.update_geminigen_config(enabled=True, global_image_concurrency=5, global_video_concurrency=5)
+            for index in range(3):
+                await db.create_geminigen_account(
+                    label=f"account-{index}",
+                    raw_cookie="",
+                    bearer_token=f"token-{index}",
+                    image_concurrency=5,
+                    video_concurrency=5,
+                )
+
+            acquired = [await db.acquire_geminigen_account("image") for _ in range(5)]
+            blocked = await db.acquire_geminigen_account("image")
+            await db.release_geminigen_account(acquired[0].id, "image")
+            acquired_after_release = await db.acquire_geminigen_account("image")
+
+            return acquired, blocked, acquired_after_release
+        finally:
+            os.unlink(tmp.name)
+
+    acquired, blocked, acquired_after_release = asyncio.run(run())
+
+    assert all(account is not None for account in acquired)
+    assert blocked is None
+    assert acquired_after_release is not None
 
 
 class FakeGeminiGenDatabase:
@@ -589,11 +638,15 @@ def test_geminigen_capacity_releases_slot_and_retries_until_success():
         nonlocal post_calls
         post_calls += 1
         if post_calls == 1:
-            raise GeminiGenUpstreamError(
-                status_code=400,
-                message=f"GeminiGen upstream capacity is full ({GEMINIGEN_CAPACITY_ERROR_CODE})",
-                error_code=GEMINIGEN_CAPACITY_ERROR_CODE,
-                retryable_capacity=True,
+            raise GeminiGenService._extract_upstream_error(
+                400,
+                json.dumps(
+                    {
+                        "detail": {
+                            "error_message": "You have reached the maximum number of 5 concurrent image generations allowed by your plan.",
+                        }
+                    }
+                ),
             )
         return {"uuid": "upstream-uuid"}
 

@@ -926,7 +926,15 @@ class GeminiGenService:
                 error_message = detail.get("error_message") or detail.get("message") or detail.get("error")
             error_code = error_code or parsed.get("error_code") or parsed.get("code")
             error_message = error_message or parsed.get("error_message") or parsed.get("message") or parsed.get("error")
-        retryable_capacity = str(error_code or "").upper() == GEMINIGEN_CAPACITY_ERROR_CODE
+        lower_error_message = str(error_message or "").lower()
+        retryable_capacity = (
+            str(error_code or "").upper() == GEMINIGEN_CAPACITY_ERROR_CODE
+            or (
+                status_code == 400
+                and "maximum number" in lower_error_message
+                and "concurrent image generation" in lower_error_message
+            )
+        )
         if retryable_capacity:
             message = f"GeminiGen upstream capacity is full ({GEMINIGEN_CAPACITY_ERROR_CODE})"
         else:

@@ -362,6 +362,8 @@ class Database:
                 poll_interval_video_sec REAL DEFAULT 12.0,
                 timeout_image_sec REAL DEFAULT 600.0,
                 timeout_video_sec REAL DEFAULT 1800.0,
+                global_image_concurrency INTEGER DEFAULT 5,
+                global_video_concurrency INTEGER DEFAULT 5,
                 cache_outputs BOOLEAN DEFAULT 1,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
@@ -427,6 +429,13 @@ class Database:
         for column_name, column_type in account_columns:
             if not await self._column_exists(db, "geminigen_accounts", column_name):
                 await db.execute(f"ALTER TABLE geminigen_accounts ADD COLUMN {column_name} {column_type}")
+        config_columns = [
+            ("global_image_concurrency", "INTEGER DEFAULT 5"),
+            ("global_video_concurrency", "INTEGER DEFAULT 5"),
+        ]
+        for column_name, column_type in config_columns:
+            if not await self._column_exists(db, "geminigen_config", column_name):
+                await db.execute(f"ALTER TABLE geminigen_config ADD COLUMN {column_name} {column_type}")
         task_columns = [
             ("request_log_id", "INTEGER"),
         ]
@@ -2812,6 +2821,8 @@ class Database:
         poll_interval_video_sec: Optional[float] = None,
         timeout_image_sec: Optional[float] = None,
         timeout_video_sec: Optional[float] = None,
+        global_image_concurrency: Optional[int] = None,
+        global_video_concurrency: Optional[int] = None,
         cache_outputs: Optional[bool] = None,
     ) -> GeminiGenConfig:
         current = await self.get_geminigen_config()
@@ -2822,6 +2833,8 @@ class Database:
             "poll_interval_video_sec": max(2.0, float(current.poll_interval_video_sec if poll_interval_video_sec is None else poll_interval_video_sec)),
             "timeout_image_sec": max(30.0, float(current.timeout_image_sec if timeout_image_sec is None else timeout_image_sec)),
             "timeout_video_sec": max(60.0, float(current.timeout_video_sec if timeout_video_sec is None else timeout_video_sec)),
+            "global_image_concurrency": max(-1, int(current.global_image_concurrency if global_image_concurrency is None else global_image_concurrency)),
+            "global_video_concurrency": max(-1, int(current.global_video_concurrency if global_video_concurrency is None else global_video_concurrency)),
             "cache_outputs": int(current.cache_outputs if cache_outputs is None else bool(cache_outputs)),
         }
         async with self._connect(write=True) as db:
@@ -2829,9 +2842,10 @@ class Database:
                 """
                 INSERT INTO geminigen_config (
                     id, enabled, base_url, poll_interval_image_sec, poll_interval_video_sec,
-                    timeout_image_sec, timeout_video_sec, cache_outputs, updated_at
+                    timeout_image_sec, timeout_video_sec, global_image_concurrency,
+                    global_video_concurrency, cache_outputs, updated_at
                 )
-                VALUES (1, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
                 ON CONFLICT(id) DO UPDATE SET
                     enabled = excluded.enabled,
                     base_url = excluded.base_url,
@@ -2839,6 +2853,8 @@ class Database:
                     poll_interval_video_sec = excluded.poll_interval_video_sec,
                     timeout_image_sec = excluded.timeout_image_sec,
                     timeout_video_sec = excluded.timeout_video_sec,
+                    global_image_concurrency = excluded.global_image_concurrency,
+                    global_video_concurrency = excluded.global_video_concurrency,
                     cache_outputs = excluded.cache_outputs,
                     updated_at = CURRENT_TIMESTAMP
                 """,
@@ -2849,6 +2865,8 @@ class Database:
                     values["poll_interval_video_sec"],
                     values["timeout_image_sec"],
                     values["timeout_video_sec"],
+                    values["global_image_concurrency"],
+                    values["global_video_concurrency"],
                     values["cache_outputs"],
                 ),
             )
@@ -2947,6 +2965,7 @@ class Database:
         is_video = str(kind or "").lower() == "video"
         limit_col = "video_concurrency" if is_video else "image_concurrency"
         inflight_col = "video_in_flight" if is_video else "image_in_flight"
+        global_limit_col = "global_video_concurrency" if is_video else "global_image_concurrency"
         excluded = [int(account_id) for account_id in (excluded_account_ids or []) if account_id]
         exclusion_clause = ""
         params: List[Any] = []
@@ -2956,6 +2975,15 @@ class Database:
             params.extend(excluded)
         async with self._connect(write=True) as db:
             db.row_factory = aiosqlite.Row
+            config_cursor = await db.execute(f"SELECT {global_limit_col} FROM geminigen_config WHERE id = 1")
+            config_row = await config_cursor.fetchone()
+            global_limit_raw = None if not config_row else config_row[global_limit_col]
+            global_limit = 5 if global_limit_raw is None else int(global_limit_raw)
+            if global_limit >= 0:
+                total_cursor = await db.execute(f"SELECT COALESCE(SUM({inflight_col}), 0) FROM geminigen_accounts")
+                total_in_flight = int((await total_cursor.fetchone())[0] or 0)
+                if total_in_flight >= global_limit:
+                    return None
             cursor = await db.execute(
                 f"""
                 SELECT * FROM geminigen_accounts
