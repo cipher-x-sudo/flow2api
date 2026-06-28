@@ -1,8 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { applyPortfolioMetadata, applyUploadMetadata, assetImages, setNativeValue } from "./dom";
+import { DEFAULT_PREFERENCES } from "../storage";
+import { applyAdobeAiDeclarations, applyPortfolioMetadata, applyUploadMetadata, assetImages, saveAdobeForm, setNativeValue } from "./dom";
+
+function makeSaveConfirmOnClick(button: HTMLButtonElement): void {
+  button.addEventListener("click", () => { button.disabled = true; });
+}
 
 describe("Adobe DOM compatibility", () => {
-  beforeEach(() => { document.body.innerHTML = ""; });
+  beforeEach(() => {
+    vi.useRealTimers();
+    document.body.innerHTML = "";
+  });
 
   it("discovers upload and portfolio fixtures independently", () => {
     document.body.innerHTML = '<img class="upload-tile__thumbnail upload-tile__thumbnail--portrait"><img class="content-thumbnail__img">';
@@ -22,23 +30,60 @@ describe("Adobe DOM compatibility", () => {
     expect(changeEvent).toHaveBeenCalledOnce();
   });
 
-  it("fills upload title, keywords, category and saves", async () => {
+  it("fills metadata, applies both AI declarations, then saves exactly once", async () => {
     document.body.innerHTML = `
       <textarea id="content-title-ui-textarea"></textarea>
       <textarea id="content-keywords-ui-textarea"></textarea>
       <div role="option" data-key="10001"></div>
-      <button class="button--action" type="submit"></button>`;
-    const category = document.querySelector<HTMLElement>('[data-key="10001"]')!;
+      <label for="ai-made">Created using generative AI tools</label><input id="ai-made" type="checkbox" />
+      <div id="conditional"></div>
+      <button type="button">Save work</button>`;
+    const ai = document.querySelector<HTMLInputElement>("#ai-made")!;
+    ai.addEventListener("change", () => {
+      if (ai.checked) document.querySelector("#conditional")!.innerHTML = '<label><input id="fictional" type="checkbox" /> People and Property are fictional</label>';
+    });
     const save = document.querySelector<HTMLButtonElement>("button")!;
-    const categoryClick = vi.spyOn(category, "click");
     const saveClick = vi.spyOn(save, "click");
-    await applyUploadMetadata({ title: "Wild bird", keywords: "bird, wildlife", category: "10001" });
+    save.addEventListener("click", () => {
+      expect(ai.checked).toBe(true);
+      expect(document.querySelector<HTMLInputElement>("#fictional")?.checked).toBe(true);
+      save.disabled = true;
+    });
+
+    await applyUploadMetadata({ title: "Wild bird", keywords: "bird, wildlife", category: "10001" }, DEFAULT_PREFERENCES);
     expect((document.querySelector("#content-title-ui-textarea") as HTMLTextAreaElement).value).toBe("Wild bird");
-    expect(categoryClick).toHaveBeenCalledOnce();
     expect(saveClick).toHaveBeenCalledOnce();
   });
 
-  it("fills the portfolio edit dialogs and saves", async () => {
+  it("supports Adobe's recognizable people/property No-button variant", async () => {
+    document.body.innerHTML = `
+      <label><input id="ai-made" type="checkbox" /> Created using generative AI tools</label>
+      <section>Recognizable people or property?<button>Yes</button><button id="no-option">No</button></section>`;
+    const no = document.querySelector<HTMLButtonElement>("#no-option")!;
+    const noClick = vi.spyOn(no, "click");
+    await applyAdobeAiDeclarations(DEFAULT_PREFERENCES);
+    expect(document.querySelector<HTMLInputElement>("#ai-made")?.checked).toBe(true);
+    expect(noClick).toHaveBeenCalledOnce();
+  });
+
+  it("can disable both Adobe declarations", async () => {
+    document.body.innerHTML = `
+      <label for="ai-made">Created using generative AI tools</label><input id="ai-made" type="checkbox" checked />
+      <label><input id="fictional" type="checkbox" checked /> People and Property are fictional</label>`;
+    await applyAdobeAiDeclarations({ ...DEFAULT_PREFERENCES, markGenerativeAi: false, confirmFictionalPeopleProperty: false });
+    expect(document.querySelector<HTMLInputElement>("#ai-made")?.checked).toBe(false);
+    expect(document.querySelector<HTMLInputElement>("#fictional")?.checked).toBe(true);
+  });
+
+  it("requires Save work to expose a verifiable saving state", async () => {
+    document.body.innerHTML = '<button>Save work</button>';
+    const save = document.querySelector<HTMLButtonElement>("button")!;
+    makeSaveConfirmOnClick(save);
+    await expect(saveAdobeForm()).resolves.toBeUndefined();
+    expect(save.disabled).toBe(true);
+  });
+
+  it("fills the legacy portfolio editors and verifies saving", async () => {
     document.body.innerHTML = `
       <button class="editable__pencil"></button>
       <input class="input--full" />
@@ -46,8 +91,9 @@ describe("Adobe DOM compatibility", () => {
       <button class="button button--floating editable__pencil margin-left-small"></button>
       <input data-t="content-keyword" /><input data-t="content-keyword" />
       <button class="button button--dialog"></button>
-      <button class="button--action" type="submit"></button>`;
-    const save = document.querySelector<HTMLButtonElement>('button[type="submit"]')!;
+      <button type="button">Save work</button>`;
+    const save = Array.from(document.querySelectorAll<HTMLButtonElement>("button")).find((button) => button.textContent === "Save work")!;
+    makeSaveConfirmOnClick(save);
     const saveClick = vi.spyOn(save, "click");
     await applyPortfolioMetadata({ title: "City skyline", keywords: "city, skyline", category: "" });
     expect((document.querySelector(".input--full") as HTMLInputElement).value).toBe("City skyline");

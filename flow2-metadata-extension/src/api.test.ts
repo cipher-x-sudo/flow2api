@@ -23,12 +23,43 @@ describe("Flow2 API client", () => {
       { baseUrl: "https://api.example.test", apiKey: "secret", keyLabel: "team", validatedAt: 1 },
       "data:image/png;base64,AAAA",
       "illustration",
-      { ...DEFAULT_PREFERENCES, language: "es", autoCategory: true },
+      {
+        ...DEFAULT_PREFERENCES,
+        language: "es",
+        includeCategory: true,
+        titleMin: 90,
+        titleMax: 155,
+        keywordMin: 31,
+        keywordMax: 48,
+        descriptionMin: 40,
+        descriptionMax: 120,
+        platforms: ["adobe-stock", "shutterstock"],
+        customPlatforms: "custom-market, Shutterstock",
+        includeReleases: true,
+        titleStyle: "commercial",
+        keywordStyle: "double-word",
+        transparentBackground: true,
+      },
     );
     const body = JSON.parse(fetchMock.mock.calls[0][1].body);
     expect(body).not.toHaveProperty("model");
     expect(body).not.toHaveProperty("backend");
-    expect(body.metadataSettings).toMatchObject({ language: "es", assetType: "illustration", titleMin: 80, keywordMax: 40 });
+    expect(body.metadataSettings).toEqual(expect.objectContaining({
+      language: "es",
+      assetType: "illustration",
+      titleMin: 90,
+      titleMax: 155,
+      keywordMin: 31,
+      keywordMax: 48,
+      descriptionMin: 40,
+      descriptionMax: 120,
+      platforms: ["adobe-stock", "shutterstock", "custom-market"],
+      includeCategory: true,
+      includeReleases: true,
+      titleStyle: "commercial",
+      keywordTypes: { singleWord: false, doubleWord: true, mixed: false },
+      transparentBackground: true,
+    }));
     expect(result.category).toBe("10584");
   });
 

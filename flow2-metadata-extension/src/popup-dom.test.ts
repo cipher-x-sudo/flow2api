@@ -18,7 +18,8 @@ describe("side-panel document", () => {
     const document = popupDocument();
     const controls = [...document.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>("input:not([type=checkbox]), select, textarea")];
     for (const control of controls) {
-      expect(document.querySelector(`label[for="${control.id}"]`), control.id).not.toBeNull();
+      const explicit = control.id ? document.querySelector(`label[for="${control.id}"]`) : null;
+      expect(explicit ?? control.closest("label"), control.id || control.getAttribute("name") || control.type).not.toBeNull();
     }
   });
 
@@ -41,5 +42,15 @@ describe("side-panel document", () => {
     const document = popupDocument();
     expect(document.querySelector("#uploadMode")?.textContent).toContain("/ca/uploads");
     expect(document.querySelector("#portfolioMode")).toBeNull();
+  });
+
+  it("exposes the complete Nexus generation choices", () => {
+    const document = popupDocument();
+    expect(document.querySelectorAll('input[name="titleStyle"]')).toHaveLength(4);
+    expect(document.querySelectorAll('input[name="keywordStyle"]')).toHaveLength(3);
+    expect(document.querySelectorAll(".platform-grid input")).toHaveLength(5);
+    expect(document.querySelector("#platformAdobe")?.hasAttribute("disabled")).toBe(true);
+    expect(document.querySelector("#markGenerativeAi")).not.toBeNull();
+    expect(document.querySelector("#confirmFictionalPeopleProperty")).not.toBeNull();
   });
 });

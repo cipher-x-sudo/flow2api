@@ -60,7 +60,14 @@ function showError(message = "") {
 
 async function activeAdobeTab(): Promise<chrome.tabs.Tab | null> {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  return isSupportedAdobeUrl(tab?.url) ? tab : null;
+  if (isSupportedAdobeUrl(tab?.url)) return tab;
+  if (!tab?.id) return null;
+  try {
+    const response = await chrome.tabs.sendMessage(tab.id, { action: "ping" });
+    return response?.status === "alive" ? tab : null;
+  } catch {
+    return null;
+  }
 }
 
 function showConnection(baseUrl = DEFAULT_BASE_URL) {

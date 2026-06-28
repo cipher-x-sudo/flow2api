@@ -14,7 +14,7 @@ describe("title compatibility rules", () => {
   });
 
   it("expands custom prompt placeholders without exposing model controls", () => {
-    const preferences = { ...DEFAULT_PREFERENCES, language: "fr" as const, autoCategory: true };
+    const preferences = { ...DEFAULT_PREFERENCES, language: "fr" as const, includeCategory: true };
     expect(expandCustomPrompt("Use {language}; type {fileType}; {category}", preferences, "vector"))
       .toContain("Use French; type vector; Return categoryId");
   });

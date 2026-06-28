@@ -48,7 +48,6 @@ function checkboxLabel(input: HTMLInputElement): string {
     input.getAttribute("aria-label"),
     explicit?.textContent,
     input.closest("label")?.textContent,
-    input.parentElement?.textContent,
   ].filter(Boolean).join(" "));
 }
 
@@ -100,14 +99,17 @@ export async function applyAdobeAiDeclarations(preferences: Preferences): Promis
   await setCheckboxState(ai, preferences.markGenerativeAi, "generative AI");
   if (!preferences.markGenerativeAi) return;
 
-  const fictional = await waitForCheckbox(/people and property are fictional/i, 2_500);
-  if (fictional) {
-    await setCheckboxState(fictional, preferences.confirmFictionalPeopleProperty, "fictional people and property");
-    return;
+  const started = Date.now();
+  while (Date.now() - started < 2_500) {
+    const fictional = findCheckbox(/people and property are fictional/i);
+    if (fictional) {
+      await setCheckboxState(fictional, preferences.confirmFictionalPeopleProperty, "fictional people and property");
+      return;
+    }
+    if (preferences.confirmFictionalPeopleProperty && await chooseNoRecognizablePeopleOrProperty()) return;
+    await delay(100);
   }
-  if (preferences.confirmFictionalPeopleProperty && !(await chooseNoRecognizablePeopleOrProperty())) {
-    throw new Error("Adobe fictional people/property control was not found.");
-  }
+  if (preferences.confirmFictionalPeopleProperty) throw new Error("Adobe fictional people/property control was not found.");
 }
 
 export function detectAssetType(mode: ProcessingMode): string {
