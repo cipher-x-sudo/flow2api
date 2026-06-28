@@ -8,6 +8,8 @@ const JOB_KEY = "flow2MetadataJob";
 interface JobState {
   active: boolean;
   navigating: boolean;
+  ownerTabId: number | null;
+  ownerWindowId: number | null;
   mode: ProcessingMode;
   startIndex: number;
   endIndex: number;
@@ -153,22 +155,44 @@ async function processPage(job: JobState): Promise<void> {
   }
 }
 
-export async function startProcessing(mode: ProcessingMode, startIndex: number, endIndex: number, recovered = false): Promise<void> {
+export async function startProcessing(
+  mode: ProcessingMode,
+  startIndex: number,
+  endIndex: number,
+  recovered = false,
+  ownerTabId: number | null = null,
+  ownerWindowId: number | null = null,
+): Promise<void> {
   if (running) throw new Error("Processing is already running.");
   running = true;
   stopRequested = false;
   stopAsError = false;
   stopMessage = "";
   const existing = recovered ? await getJob() : null;
-  const job: JobState = existing ?? { active: true, navigating: false, mode, startIndex, endIndex, nextIndex: Math.max(0, startIndex - 1) };
+  const job: JobState = existing ?? {
+    active: true,
+    navigating: false,
+    ownerTabId,
+    ownerWindowId,
+    mode,
+    startIndex,
+    endIndex,
+    nextIndex: Math.max(0, startIndex - 1),
+  };
   job.active = true;
   job.navigating = false;
+  if (!recovered) {
+    job.ownerTabId = ownerTabId;
+    job.ownerWindowId = ownerWindowId;
+  }
   await saveJob(job);
   if (!recovered) {
     await updateRuntime({
       processing: true,
       stopped: false,
       phase: "starting",
+      ownerTabId: job.ownerTabId,
+      ownerWindowId: job.ownerWindowId,
       processed: 0,
       successes: 0,
       currentPage: 1,
@@ -179,7 +203,14 @@ export async function startProcessing(mode: ProcessingMode, startIndex: number, 
       message: "Preparing the run…",
     });
   } else {
-    await updateRuntime({ processing: true, stopped: false, phase: "starting", message: "Resuming the run…" });
+    await updateRuntime({
+      processing: true,
+      stopped: false,
+      phase: "starting",
+      ownerTabId: job.ownerTabId,
+      ownerWindowId: job.ownerWindowId,
+      message: "Resuming the run…",
+    });
   }
   try {
     await processPage(job);
@@ -216,7 +247,7 @@ export async function recoverAfterNavigation(): Promise<void> {
   const runtime = await getRuntimeState();
   if (job?.active && job.navigating && runtime.processing) {
     await delay(700);
-    void startProcessing(job.mode, 1, job.endIndex, true);
+    void startProcessing(job.mode, 1, job.endIndex, true, job.ownerTabId, job.ownerWindowId);
   } else if (runtime.processing) {
     await updateRuntime({ processing: false, stopped: true, phase: "paused", message: "Page refresh detected. Processing paused safely." });
   }

@@ -1,5 +1,5 @@
 import { Flow2ApiError, generateMetadata, validateSession } from "./api";
-import { ADOBE_UPLOADS_URL } from "./adobe-url";
+import { ADOBE_UPLOADS_URLS } from "./adobe-url";
 import { applyTitleRules } from "./title";
 import { clearConnection, DEFAULT_RUNTIME, getConnection, getPreferences, invalidateConnection, saveConnection, saveRuntimeState } from "./storage";
 import { normalizeBaseUrl } from "./url-policy";
@@ -20,18 +20,18 @@ chrome.action.onClicked.addListener((tab) => {
 });
 
 chrome.runtime.onInstalled.addListener(() => {
-  const uploadsUrl = new URL(ADOBE_UPLOADS_URL);
+  const uploadsUrls = ADOBE_UPLOADS_URLS.map((value) => new URL(value));
   chrome.declarativeContent.onPageChanged.removeRules(undefined, () => {
     chrome.declarativeContent.onPageChanged.addRules([
       {
-        conditions: [
+        conditions: uploadsUrls.flatMap((uploadsUrl) => [
           new chrome.declarativeContent.PageStateMatcher({
             pageUrl: { hostEquals: uploadsUrl.hostname, pathEquals: uploadsUrl.pathname, schemes: ["https"] },
           }),
           new chrome.declarativeContent.PageStateMatcher({
             pageUrl: { hostEquals: uploadsUrl.hostname, pathEquals: `${uploadsUrl.pathname}/`, schemes: ["https"] },
           }),
-        ],
+        ]),
         actions: [new chrome.declarativeContent.ShowAction()],
       },
     ]);

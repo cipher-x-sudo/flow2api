@@ -1,8 +1,9 @@
-import { DEFAULT_BASE_URL, DEFAULT_PREFERENCES, getPreferences, getRuntimeState, savePreferences } from "./storage";
+import { DEFAULT_BASE_URL, DEFAULT_PREFERENCES, getPreferences, getRuntimeState, savePreferences, saveRuntimeState } from "./storage";
 import { ADOBE_UPLOADS_URL, isSupportedAdobeUrl } from "./adobe-url";
 import type { KeywordStyle, LanguageCode, Preferences, RunActivity, RunPhase, RuntimeState, TitleStyle, TitleSuffix } from "./types";
 import { deriveRunUiState, type RunAction } from "./ui-state";
 import { ensureOriginPermission, normalizeBaseUrl } from "./url-policy";
+import { classifyWorkspaceContext, hasOwnedRun, type WorkspaceStatus } from "./workspace-context";
 
 const byId = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const connectionView = byId<HTMLElement>("connectionView");
@@ -14,6 +15,9 @@ const apiKeyInput = byId<HTMLInputElement>("apiKey");
 const connectionError = byId<HTMLElement>("connectionError");
 const runActionButton = byId<HTMLButtonElement>("runActionButton");
 const startNewButton = byId<HTMLButtonElement>("startNewButton");
+const workspaceNotice = byId<HTMLElement>("workspaceNotice");
+const workspaceNoticeText = byId<HTMLElement>("workspaceNoticeText");
+const returnToRunButton = byId<HTMLButtonElement>("returnToRunButton");
 const statusElement = byId<HTMLElement>("status");
 const progressTrack = byId<HTMLElement>("progressTrack");
 const progressValue = byId<HTMLElement>("progressValue");
@@ -52,25 +56,51 @@ const platformControls: Array<[string, string]> = [
 let preferences: Preferences = { ...DEFAULT_PREFERENCES };
 let runtimeState: RuntimeState;
 let currentAction: RunAction = "start";
+let connectedKeyLabel = "";
+let workspaceRefreshTimer: number | null = null;
+let workspaceRequestToken = 0;
 
 function showError(message = "") {
   connectionError.textContent = message;
   connectionError.hidden = !message;
 }
 
+function isLikelyInjectableAdobeTab(tab: chrome.tabs.Tab | null | undefined): tab is chrome.tabs.Tab & { id: number } {
+  return Boolean(tab?.id && isSupportedAdobeUrl(tab.url));
+}
+
+async function ensureContentScript(tabId: number): Promise<boolean> {
+  try {
+    const response = await chrome.tabs.sendMessage(tabId, { action: "ping" });
+    return response?.status === "alive" && response?.supported !== false;
+  } catch {
+    try {
+      await chrome.scripting.executeScript({ target: { tabId }, files: ["content.js"] });
+      const response = await chrome.tabs.sendMessage(tabId, { action: "ping" });
+      return response?.status === "alive" && response?.supported !== false;
+    } catch {
+      return false;
+    }
+  }
+}
+
 async function activeAdobeTab(): Promise<chrome.tabs.Tab | null> {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (isSupportedAdobeUrl(tab?.url)) return tab;
-  if (!tab?.id) return null;
+  if (!isLikelyInjectableAdobeTab(tab)) return null;
+  return await ensureContentScript(tab.id) ? tab : null;
+}
+
+async function tabById(tabId: number | null): Promise<chrome.tabs.Tab | null> {
+  if (tabId === null) return null;
   try {
-    const response = await chrome.tabs.sendMessage(tab.id, { action: "ping" });
-    return response?.status === "alive" ? tab : null;
+    return await chrome.tabs.get(tabId);
   } catch {
     return null;
   }
 }
 
 function showConnection(baseUrl = DEFAULT_BASE_URL) {
+  connectedKeyLabel = "";
   baseUrlInput.value = baseUrl;
   apiKeyInput.value = "";
   apiKeyInput.type = "password";
@@ -82,13 +112,112 @@ function showConnection(baseUrl = DEFAULT_BASE_URL) {
   headerConnection.hidden = true;
 }
 
+function setContextView(status: WorkspaceStatus) {
+  const eyebrow = notAdobeView.querySelector<HTMLElement>(".eyebrow");
+  const title = byId("contextTitle");
+  const message = byId("contextMessage");
+  const openButton = byId<HTMLButtonElement>("openAdobeButton");
+  if (eyebrow) eyebrow.textContent = status === "checking" ? "Checking workspace" : "Workspace unavailable";
+  if (status === "checking") {
+    title.textContent = "Checking Adobe workspace";
+    message.textContent = "One moment while Flow2 verifies the active tab.";
+    openButton.hidden = true;
+  } else if (status === "owner-tab-lost") {
+    title.textContent = "Adobe run tab was lost";
+    message.textContent = "The tab that owned the run closed or left the English/Canadian Uploads page. Open Adobe again to start or recover safely.";
+    openButton.hidden = false;
+  } else {
+    title.textContent = "Open Adobe Stock Contributor";
+    message.textContent = "This control desk activates only on the English or Canadian Uploads page.";
+    openButton.hidden = false;
+  }
+}
+
+function showWorkspaceNotice(status: WorkspaceStatus, runtime: RuntimeState) {
+  if (status === "run-in-another-tab") {
+    workspaceNotice.hidden = false;
+    workspaceNoticeText.textContent = `Run active in another Adobe tab. ${runtime.processed} processed so far.`;
+    returnToRunButton.hidden = false;
+  } else if (status === "owner-tab-lost") {
+    workspaceNotice.hidden = false;
+    workspaceNoticeText.textContent = "The run's Adobe tab was closed or navigated away. Open an allowed Uploads page to start again.";
+    returnToRunButton.hidden = true;
+  } else {
+    workspaceNotice.hidden = true;
+  }
+}
+
 async function showApplication(keyLabel: string) {
+  connectedKeyLabel = keyLabel;
   connectionView.hidden = true;
   headerConnection.hidden = false;
   byId("connectionLabel").textContent = keyLabel;
-  const tab = await activeAdobeTab();
-  notAdobeView.hidden = Boolean(tab);
-  appView.hidden = !tab;
+  await refreshWorkspaceContext("application");
+}
+
+async function markOwnerTabLost(message = "Adobe run tab was closed or left an allowed Uploads page. Open Uploads to start again."): Promise<void> {
+  const runtime = await getRuntimeState();
+  if (!hasOwnedRun(runtime)) return;
+  const next: RuntimeState = {
+    ...runtime,
+    processing: false,
+    stopped: true,
+    phase: "error",
+    ownerTabId: null,
+    ownerWindowId: null,
+    message,
+  };
+  await saveRuntimeState(next);
+  renderRuntime(next);
+  void chrome.runtime.sendMessage({ type: "PROCESSING_UPDATE", state: next }).catch(() => undefined);
+}
+
+async function refreshWorkspaceContext(_reason: string, checking = false): Promise<void> {
+  if (!connectedKeyLabel) return;
+  const requestToken = ++workspaceRequestToken;
+  if (checking) {
+    connectionView.hidden = true;
+    headerConnection.hidden = false;
+    setContextView("checking");
+    notAdobeView.hidden = false;
+    appView.hidden = true;
+  }
+
+  const runtime = await getRuntimeState();
+  const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  const activeTabId = activeTab?.id ?? null;
+  const activeSupported = Boolean(isLikelyInjectableAdobeTab(activeTab) && await ensureContentScript(activeTab.id));
+  const ownerTab = await tabById(runtime.ownerTabId);
+  const ownerPresent = Boolean(ownerTab?.id);
+  const ownerSupported = Boolean(ownerTab && isSupportedAdobeUrl(ownerTab.url) && await ensureContentScript(ownerTab.id!));
+  if (requestToken !== workspaceRequestToken) return;
+
+  const context = classifyWorkspaceContext({
+    activeTabId,
+    activeSupported,
+    ownerTabId: runtime.ownerTabId,
+    ownerPresent,
+    ownerSupported,
+    phase: runtime.phase,
+  });
+
+  connectionView.hidden = true;
+  headerConnection.hidden = false;
+  if (context.status === "owner-tab-lost" && hasOwnedRun(runtime)) {
+    await markOwnerTabLost();
+  }
+  setContextView(context.status);
+  showWorkspaceNotice(context.status, runtime);
+  appView.hidden = !context.canShowConsole;
+  notAdobeView.hidden = context.canShowConsole;
+}
+
+function scheduleWorkspaceRefresh(reason: string, checking = false): void {
+  if (workspaceRefreshTimer !== null) window.clearTimeout(workspaceRefreshTimer);
+  workspaceRefreshTimer = window.setTimeout(() => {
+    workspaceRefreshTimer = null;
+    void refreshWorkspaceContext(reason, checking);
+  }, checking ? 60 : 160);
 }
 
 function numberValue(id: string, fallback: number): number {
@@ -151,6 +280,13 @@ function updateAllRangeVisuals(value = readPreferences()) {
 }
 
 async function persistPreferences(): Promise<boolean> {
+  const rangeInputs = ["titleMin", "titleMax", "keywordMin", "keywordMax", "descriptionMin", "descriptionMax"]
+    .map((id) => byId<HTMLInputElement>(id));
+  if (rangeInputs.some((input) => !input.checkValidity())) {
+    statusElement.textContent = "Generation limits must stay within the allowed ranges.";
+    byId<HTMLDetailsElement>("metadataDetails").open = true;
+    return false;
+  }
   const next = readPreferences();
   if (next.titleMin > next.titleMax || next.keywordMin > next.keywordMax || next.descriptionMin > next.descriptionMax) {
     statusElement.textContent = "Minimum values cannot exceed maximum values.";
@@ -302,20 +438,34 @@ async function connect() {
   }
 }
 
-async function sendToActiveTab(message: unknown) {
-  const tab = await activeAdobeTab();
-  if (!tab?.id) throw new Error("Open an Adobe Stock Contributor Uploads or Portfolio page.");
-  try {
-    await chrome.tabs.sendMessage(tab.id, { action: "ping" });
-  } catch {
-    await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ["content.js"] });
-  }
+async function sendToTab(tab: chrome.tabs.Tab & { id: number }, message: unknown) {
+  if (!(await ensureContentScript(tab.id))) throw new Error("Could not connect to the Adobe page. Reload the tab once and try again.");
   try {
     return await chrome.tabs.sendMessage(tab.id, message);
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     throw new Error(`Could not connect to the Adobe page. Reload the tab once and try again. ${detail}`);
   }
+}
+
+async function sendToCurrentAdobeTab(message: Record<string, unknown>) {
+  const tab = await activeAdobeTab();
+  if (!tab?.id) throw new Error("Open the exact English or Canadian Adobe Uploads page first.");
+  return sendToTab(tab as chrome.tabs.Tab & { id: number }, { ...message, ownerTabId: tab.id, ownerWindowId: tab.windowId ?? null });
+}
+
+async function sendToOwnerTab(message: Record<string, unknown>) {
+  const runtime = await getRuntimeState();
+  const owner = await tabById(runtime.ownerTabId);
+  if (!owner?.id || !isSupportedAdobeUrl(owner.url)) {
+    await markOwnerTabLost();
+    throw new Error("The Adobe tab that owned this run is no longer available.");
+  }
+  return sendToTab(owner as chrome.tabs.Tab & { id: number }, {
+    ...message,
+    ownerTabId: owner.id,
+    ownerWindowId: owner.windowId ?? runtime.ownerWindowId ?? null,
+  });
 }
 
 async function startFreshRun() {
@@ -339,19 +489,19 @@ async function startFreshRun() {
     message: "Preparing the run…",
   };
   renderRuntime(optimistic);
-  const response = await sendToActiveTab({ action: "startProcessing", mode: preferences.mode, startIndex: start, endIndex: end });
+  const response = await sendToCurrentAdobeTab({ action: "startProcessing", mode: preferences.mode, startIndex: start, endIndex: end });
   if (!response?.success) throw new Error(response?.error || "Unable to start processing.");
 }
 
 async function resumeRun() {
   renderRuntime({ ...runtimeState, processing: true, stopped: false, phase: "starting", message: "Resuming the run…" });
-  const response = await sendToActiveTab({ action: "resumeProcessing" });
+  const response = await sendToOwnerTab({ action: "resumeProcessing" });
   if (!response?.success) throw new Error(response?.error || "Unable to resume processing.");
 }
 
 async function pauseRun() {
   renderRuntime({ ...runtimeState, phase: "pausing", message: "Finishing the current step before pausing…" });
-  const response = await sendToActiveTab({ action: "stopProcessing" });
+  const response = await sendToOwnerTab({ action: "stopProcessing" });
   if (!response?.success) throw new Error(response?.error || "Unable to pause processing.");
 }
 
@@ -397,6 +547,24 @@ async function editConnection() {
 byId("editConnection").addEventListener("click", () => void editConnection());
 byId("editConnectionFromContext").addEventListener("click", () => void editConnection());
 byId("openAdobeButton").addEventListener("click", () => void chrome.tabs.create({ url: ADOBE_UPLOADS_URL }));
+returnToRunButton.addEventListener("click", async () => {
+  const runtime = await getRuntimeState();
+  if (runtime.ownerWindowId !== null) {
+    try {
+      await chrome.windows.update(runtime.ownerWindowId, { focused: true });
+    } catch {
+      // The tab update below is enough if the window no longer exists.
+    }
+  }
+  if (runtime.ownerTabId !== null) {
+    try {
+      await chrome.tabs.update(runtime.ownerTabId, { active: true });
+    } catch {
+      await markOwnerTabLost();
+    }
+  }
+  scheduleWorkspaceRefresh("return-to-run", true);
+});
 
 for (const id of [
   "language", "titleSuffix", "titlePrefix", "customTitleSuffix", "titleMin", "titleMax", "keywordMin", "keywordMax",
@@ -436,9 +604,36 @@ startNewButton.addEventListener("click", () => void startFreshRun().catch((error
 }));
 
 chrome.runtime.onMessage.addListener((message) => {
-  if (message?.type === "PROCESSING_UPDATE") renderRuntime(message.state as RuntimeState);
+  if (message?.type === "PROCESSING_UPDATE") {
+    renderRuntime(message.state as RuntimeState);
+    scheduleWorkspaceRefresh("processing-update");
+  }
   if (message?.type === "CONNECTION_INVALID") showConnection(message.baseUrl || DEFAULT_BASE_URL);
+  if (message?.type === "PAGE_CONTEXT_CHANGED") scheduleWorkspaceRefresh("content-url-change", true);
 });
+
+chrome.tabs.onActivated.addListener(() => scheduleWorkspaceRefresh("tab-activated", true));
+chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+  if (changeInfo.status === "loading" || changeInfo.url !== undefined) scheduleWorkspaceRefresh("tab-updated", true);
+  if (changeInfo.url !== undefined) {
+    void getRuntimeState().then((runtime) => {
+      if (runtime.ownerTabId === tabId && hasOwnedRun(runtime) && !isSupportedAdobeUrl(changeInfo.url)) {
+        void markOwnerTabLost("The Adobe run tab navigated away from an allowed Uploads page. Processing stopped safely.");
+      }
+    });
+  }
+});
+chrome.tabs.onRemoved.addListener((tabId) => {
+  void getRuntimeState().then((runtime) => {
+    if (runtime.ownerTabId === tabId && hasOwnedRun(runtime)) void markOwnerTabLost("The Adobe run tab was closed. Processing stopped safely.");
+  });
+  scheduleWorkspaceRefresh("tab-removed", true);
+});
+chrome.windows.onFocusChanged.addListener(() => scheduleWorkspaceRefresh("window-focus", true));
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) scheduleWorkspaceRefresh("visibility", true);
+});
+window.addEventListener("focus", () => scheduleWorkspaceRefresh("focus", true));
 
 document.addEventListener("DOMContentLoaded", async () => {
   renderPreferences(await getPreferences());

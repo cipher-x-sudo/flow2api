@@ -38,8 +38,16 @@ describe("side-panel document", () => {
     expect(document.querySelector("#startNewButton")?.hasAttribute("hidden")).toBe(true);
   });
 
+  it("includes automatic workspace-context messaging and return-to-run affordance", () => {
+    const document = popupDocument();
+    expect(document.querySelector("#contextMessage")?.textContent).toContain("English or Canadian Uploads");
+    expect(document.querySelector("#workspaceNotice")?.getAttribute("role")).toBe("status");
+    expect(document.querySelector("#returnToRunButton")?.textContent).toBe("Return to Adobe run");
+  });
+
   it("locks the workspace to the uploads mode", () => {
     const document = popupDocument();
+    expect(document.querySelector("#uploadMode")?.textContent).toContain("/en/uploads");
     expect(document.querySelector("#uploadMode")?.textContent).toContain("/ca/uploads");
     expect(document.querySelector("#portfolioMode")).toBeNull();
   });

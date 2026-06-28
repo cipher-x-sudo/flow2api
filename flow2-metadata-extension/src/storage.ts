@@ -12,6 +12,8 @@ export const DEFAULT_RUNTIME: RuntimeState = {
   processing: false,
   stopped: false,
   phase: "idle",
+  ownerTabId: null,
+  ownerWindowId: null,
   processed: 0,
   successes: 0,
   currentPage: 1,

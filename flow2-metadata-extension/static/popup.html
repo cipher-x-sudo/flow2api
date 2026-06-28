@@ -51,8 +51,8 @@
           <div class="context-orbit" aria-hidden="true"><span></span><i></i></div>
           <p class="eyebrow">Workspace unavailable</p>
           <h2 id="contextTitle">Open Adobe Stock Contributor</h2>
-          <p class="lede">This control desk activates only on the Canadian Uploads page.</p>
-          <button id="openAdobeButton" class="button primary-button">Open Canadian Uploads</button>
+          <p id="contextMessage" class="lede">This control desk activates only on the English or Canadian Uploads page.</p>
+          <button id="openAdobeButton" class="button primary-button">Open Uploads</button>
           <button id="editConnectionFromContext" class="button quiet-button">Edit connection</button>
         </section>
 
@@ -63,6 +63,10 @@
               <button id="editConnection" class="text-button">Edit</button>
               <button id="disconnectButton" class="text-button danger-text">Disconnect</button>
             </div>
+          </div>
+          <div id="workspaceNotice" class="workspace-notice" role="status" hidden>
+            <span id="workspaceNoticeText">Workspace context changed.</span>
+            <button id="returnToRunButton" class="text-button">Return to Adobe run</button>
           </div>
 
           <section class="console-panel" aria-labelledby="consoleTitle">
@@ -114,7 +118,7 @@
               <div id="uploadMode" class="workspace-lock">
                 <span aria-hidden="true"></span>
                 <strong>New uploads</strong>
-                <small>/ca/uploads</small>
+                <small>/en/uploads or /ca/uploads</small>
               </div>
             </fieldset>
 

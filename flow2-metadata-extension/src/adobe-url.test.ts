@@ -1,12 +1,23 @@
 import { describe, expect, it } from "vitest";
-import { ADOBE_UPLOADS_URL, isSupportedAdobeUrl } from "./adobe-url";
+import { ADOBE_UPLOADS_URL, ADOBE_UPLOADS_URLS, isSupportedAdobeUrl, normalizedAdobeUploadsRoute } from "./adobe-url";
 
 describe("Adobe page restriction", () => {
-  it("accepts only the Canadian uploads route", () => {
-    expect(isSupportedAdobeUrl(ADOBE_UPLOADS_URL)).toBe(true);
-    expect(isSupportedAdobeUrl(`${ADOBE_UPLOADS_URL}/`)).toBe(true);
-    expect(isSupportedAdobeUrl(`${ADOBE_UPLOADS_URL}?sort=newest`)).toBe(true);
-    expect(isSupportedAdobeUrl(`${ADOBE_UPLOADS_URL}#asset-2`)).toBe(true);
+  it("accepts only the supported English and Canadian uploads routes", () => {
+    for (const url of ADOBE_UPLOADS_URLS) {
+      expect(isSupportedAdobeUrl(url)).toBe(true);
+      expect(isSupportedAdobeUrl(`${url}/`)).toBe(true);
+      expect(isSupportedAdobeUrl(`${url}?sort=newest`)).toBe(true);
+      expect(isSupportedAdobeUrl(`${url}#asset-2`)).toBe(true);
+    }
+    expect(ADOBE_UPLOADS_URL).toBe("https://contributor.stock.adobe.com/ca/uploads");
+  });
+
+  it("normalizes supported routes without query strings or fragments", () => {
+    expect(normalizedAdobeUploadsRoute("https://contributor.stock.adobe.com/en/uploads/?sort=newest#asset-2"))
+      .toBe("https://contributor.stock.adobe.com/en/uploads");
+    expect(normalizedAdobeUploadsRoute("https://contributor.stock.adobe.com/ca/uploads#asset-2"))
+      .toBe("https://contributor.stock.adobe.com/ca/uploads");
+    expect(normalizedAdobeUploadsRoute("https://contributor.stock.adobe.com/us/uploads")).toBe("");
   });
 
   it.each([

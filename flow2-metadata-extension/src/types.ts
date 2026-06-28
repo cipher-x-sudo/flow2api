@@ -51,6 +51,8 @@ export interface RuntimeState {
   processing: boolean;
   stopped: boolean;
   phase: RunPhase;
+  ownerTabId: number | null;
+  ownerWindowId: number | null;
   processed: number;
   successes: number;
   currentPage: number;

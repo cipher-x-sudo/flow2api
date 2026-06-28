@@ -12,6 +12,7 @@
     "storage"
   ],
   "host_permissions": [
+    "https://contributor.stock.adobe.com/en/uploads*",
     "https://contributor.stock.adobe.com/ca/uploads*"
   ],
   "optional_host_permissions": ["https://*/*", "http://*/*"],
@@ -34,6 +35,7 @@
   "content_scripts": [
     {
       "matches": [
+        "https://contributor.stock.adobe.com/en/uploads*",
         "https://contributor.stock.adobe.com/ca/uploads*"
       ],
       "js": ["content.js"],

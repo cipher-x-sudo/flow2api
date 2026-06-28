@@ -44,13 +44,15 @@ describe("Adobe DOM compatibility", () => {
     });
     const save = document.querySelector<HTMLButtonElement>("button")!;
     const saveClick = vi.spyOn(save, "click");
+    const onSaving = vi.fn();
     save.addEventListener("click", () => {
+      expect(onSaving).toHaveBeenCalledOnce();
       expect(ai.checked).toBe(true);
       expect(document.querySelector<HTMLInputElement>("#fictional")?.checked).toBe(true);
       save.disabled = true;
     });
 
-    await applyUploadMetadata({ title: "Wild bird", keywords: "bird, wildlife", category: "10001" }, DEFAULT_PREFERENCES);
+    await applyUploadMetadata({ title: "Wild bird", keywords: "bird, wildlife", category: "10001" }, DEFAULT_PREFERENCES, onSaving);
     expect((document.querySelector("#content-title-ui-textarea") as HTMLTextAreaElement).value).toBe("Wild bird");
     expect(saveClick).toHaveBeenCalledOnce();
   });
@@ -81,6 +83,17 @@ describe("Adobe DOM compatibility", () => {
     makeSaveConfirmOnClick(save);
     await expect(saveAdobeForm()).resolves.toBeUndefined();
     expect(save.disabled).toBe(true);
+  });
+
+  it("fails instead of advancing when Save work never confirms", async () => {
+    vi.useFakeTimers();
+    document.body.innerHTML = '<button>Save work</button>';
+    const save = document.querySelector<HTMLButtonElement>("button")!;
+    const saveClick = vi.spyOn(save, "click");
+    const assertion = expect(saveAdobeForm()).rejects.toThrow('Adobe did not confirm "Save work" completion.');
+    await vi.advanceTimersByTimeAsync(10_100);
+    await assertion;
+    expect(saveClick).toHaveBeenCalledOnce();
   });
 
   it("fills the legacy portfolio editors and verifies saving", async () => {

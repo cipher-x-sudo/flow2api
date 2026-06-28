@@ -1,5 +1,5 @@
 import { imageCount, recoverAfterNavigation, startProcessing, stopProcessing } from "./adobe/automation";
-import { isSupportedAdobeUrl } from "./adobe-url";
+import { isSupportedAdobeUrl, normalizedAdobeUploadsRoute } from "./adobe-url";
 import type { ProcessingMode } from "./types";
 
 interface ContentMessage {
@@ -7,11 +7,52 @@ interface ContentMessage {
   mode?: ProcessingMode;
   startIndex?: number;
   endIndex?: number;
+  ownerTabId?: number | null;
+  ownerWindowId?: number | null;
 }
 
-if (isSupportedAdobeUrl(location.href)) chrome.runtime.onMessage.addListener((message: ContentMessage, _sender, sendResponse) => {
+declare global {
+  interface Window {
+    __flow2MetadataContentLoaded?: boolean;
+    __flow2MetadataLastHref?: string;
+    __flow2MetadataLocationTimer?: number;
+  }
+}
+
+function supportedNow(): boolean {
+  return isSupportedAdobeUrl(location.href);
+}
+
+function sendPageContext(): void {
+  void chrome.runtime.sendMessage({
+    type: "PAGE_CONTEXT_CHANGED",
+    supported: supportedNow(),
+    route: normalizedAdobeUploadsRoute(location.href),
+  }).catch(() => undefined);
+}
+
+function watchLocationChanges(): void {
+  const check = () => {
+    if (window.__flow2MetadataLastHref === location.href) return;
+    window.__flow2MetadataLastHref = location.href;
+    sendPageContext();
+    if (supportedNow()) void recoverAfterNavigation();
+  };
+  window.addEventListener("popstate", check);
+  window.addEventListener("hashchange", check);
+  window.__flow2MetadataLocationTimer = window.setInterval(check, 700);
+  check();
+}
+
+if (!window.__flow2MetadataContentLoaded) {
+  window.__flow2MetadataContentLoaded = true;
+  chrome.runtime.onMessage.addListener((message: ContentMessage, _sender, sendResponse) => {
   if (message.action === "ping") {
-    sendResponse({ success: true, status: "alive" });
+    sendResponse({ success: true, status: "alive", supported: supportedNow() });
+    return false;
+  }
+  if (!supportedNow() && message.action !== "stopProcessing") {
+    sendResponse({ success: false, error: "Open the English or Canadian Adobe Uploads page first." });
     return false;
   }
   if (message.action === "getImageCount") {
@@ -19,7 +60,14 @@ if (isSupportedAdobeUrl(location.href)) chrome.runtime.onMessage.addListener((me
     return true;
   }
   if (message.action === "startProcessing") {
-    void startProcessing(message.mode || "upload", message.startIndex || 1, message.endIndex || 0)
+    void startProcessing(
+      message.mode || "upload",
+      message.startIndex || 1,
+      message.endIndex || 0,
+      false,
+      message.ownerTabId ?? null,
+      message.ownerWindowId ?? null,
+    )
       .then(() => undefined)
       .catch(() => undefined);
     sendResponse({ success: true });
@@ -30,13 +78,14 @@ if (isSupportedAdobeUrl(location.href)) chrome.runtime.onMessage.addListener((me
     return true;
   }
   if (message.action === "resumeProcessing") {
-    void startProcessing(message.mode || "upload", 1, 0, true)
+    void startProcessing(message.mode || "upload", 1, 0, true, message.ownerTabId ?? null, message.ownerWindowId ?? null)
       .then(() => undefined)
       .catch(() => undefined);
     sendResponse({ success: true });
     return false;
   }
   return false;
-});
+  });
 
-if (isSupportedAdobeUrl(location.href)) void recoverAfterNavigation();
+  watchLocationChanges();
+}

@@ -44,10 +44,16 @@ function checkboxLabel(input: HTMLInputElement): string {
   const explicit = input.id
     ? Array.from(document.querySelectorAll<HTMLLabelElement>("label[for]")).find((label) => label.htmlFor === input.id) ?? null
     : null;
+  const container = input.closest<HTMLElement>('label, [role="checkbox"], [class*="Checkbox"], [class*="checkbox"]');
+  const parentText = input.parentElement && input.parentElement !== document.body
+    && normalizedText(input.parentElement.textContent).length <= 220
+    ? input.parentElement.textContent
+    : "";
   return normalizedText([
     input.getAttribute("aria-label"),
     explicit?.textContent,
-    input.closest("label")?.textContent,
+    container?.textContent,
+    parentText,
   ].filter(Boolean).join(" "));
 }
 
