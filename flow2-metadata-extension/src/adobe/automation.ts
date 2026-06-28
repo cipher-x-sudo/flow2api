@@ -86,9 +86,11 @@ async function processPage(job: JobState): Promise<void> {
         message: `Applying metadata to asset ${assetNumber} of ${limit}`,
       });
       const preferences = await getPreferences();
-      const onSaving = () => updateActivity(assetNumber, "saving", "Saving work in Adobe", {
-        message: `Saving asset ${assetNumber} of ${limit} in Adobe`,
-      });
+      const onSaving = async () => {
+        await updateActivity(assetNumber, "saving", "Saving work in Adobe", {
+          message: `Saving asset ${assetNumber} of ${limit} in Adobe`,
+        });
+      };
       if (job.mode === "upload") await applyUploadMetadata(metadata, preferences, onSaving);
       else await applyPortfolioMetadata(metadata, onSaving);
       consecutiveFailures = 0;
