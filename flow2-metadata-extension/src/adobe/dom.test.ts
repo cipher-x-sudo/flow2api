@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { applyUploadMetadata, assetImages, setNativeValue } from "./dom";
+import { applyPortfolioMetadata, applyUploadMetadata, assetImages, setNativeValue } from "./dom";
 
 describe("Adobe DOM compatibility", () => {
   beforeEach(() => { document.body.innerHTML = ""; });
@@ -35,6 +35,24 @@ describe("Adobe DOM compatibility", () => {
     await applyUploadMetadata({ title: "Wild bird", keywords: "bird, wildlife", category: "10001" });
     expect((document.querySelector("#content-title-ui-textarea") as HTMLTextAreaElement).value).toBe("Wild bird");
     expect(categoryClick).toHaveBeenCalledOnce();
+    expect(saveClick).toHaveBeenCalledOnce();
+  });
+
+  it("fills the portfolio edit dialogs and saves", async () => {
+    document.body.innerHTML = `
+      <button class="editable__pencil"></button>
+      <input class="input--full" />
+      <button class="button__text text-up"></button>
+      <button class="button button--floating editable__pencil margin-left-small"></button>
+      <input data-t="content-keyword" /><input data-t="content-keyword" />
+      <button class="button button--dialog"></button>
+      <button class="button--action" type="submit"></button>`;
+    const save = document.querySelector<HTMLButtonElement>('button[type="submit"]')!;
+    const saveClick = vi.spyOn(save, "click");
+    await applyPortfolioMetadata({ title: "City skyline", keywords: "city, skyline", category: "" });
+    expect((document.querySelector(".input--full") as HTMLInputElement).value).toBe("City skyline");
+    expect(Array.from(document.querySelectorAll<HTMLInputElement>('[data-t="content-keyword"]')).map((input) => input.value))
+      .toEqual(["city", "skyline"]);
     expect(saveClick).toHaveBeenCalledOnce();
   });
 });

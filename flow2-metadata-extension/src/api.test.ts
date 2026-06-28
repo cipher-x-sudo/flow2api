@@ -31,4 +31,15 @@ describe("Flow2 API client", () => {
     expect(body.metadataSettings).toMatchObject({ language: "es", assetType: "illustration", titleMin: 80, keywordMax: 40 });
     expect(result.category).toBe("10584");
   });
+
+  it("surfaces authentication failures without retrying", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ detail: "Invalid API key" }), {
+      status: 401,
+      headers: { "Content-Type": "application/json" },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(validateSession("https://api.example.test", "bad"))
+      .rejects.toMatchObject({ status: 401, message: "Invalid API key" });
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
 });

@@ -1,5 +1,7 @@
-import { describe, expect, it } from "vitest";
-import { isPrivateDevelopmentHost, normalizeBaseUrl, permissionOrigin } from "./url-policy";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { ensureOriginPermission, isPrivateDevelopmentHost, normalizeBaseUrl, permissionOrigin } from "./url-policy";
+
+afterEach(() => vi.unstubAllGlobals());
 
 describe("Flow2 Base URL policy", () => {
   it("normalizes HTTPS servers", () => {
@@ -16,5 +18,12 @@ describe("Flow2 Base URL policy", () => {
   it("rejects insecure public servers and embedded credentials", () => {
     expect(() => normalizeBaseUrl("http://api.example.com")).toThrow(/HTTPS/);
     expect(() => normalizeBaseUrl("https://user:pass@api.example.com")).toThrow(/credentials/);
+  });
+
+  it("does not connect when runtime host permission is denied", async () => {
+    const request = vi.fn().mockResolvedValue(false);
+    vi.stubGlobal("chrome", { permissions: { contains: vi.fn().mockResolvedValue(false), request } });
+    await expect(ensureOriginPermission("https://api.example.com")).resolves.toBe(false);
+    expect(request).toHaveBeenCalledWith({ origins: ["https://api.example.com/*"] });
   });
 });
