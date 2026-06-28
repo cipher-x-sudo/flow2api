@@ -1,0 +1,34 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { generateMetadata, validateSession } from "./api";
+import { DEFAULT_PREFERENCES } from "./storage";
+
+afterEach(() => vi.unstubAllGlobals());
+
+describe("Flow2 API client", () => {
+  it("validates an extension session", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      active: true, service: "flow2-metadata", keyLabel: "team", capabilities: ["adobe:metadata"],
+    }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(validateSession("https://api.example.test", "secret")).resolves.toMatchObject({ keyLabel: "team" });
+    expect(fetchMock.mock.calls[0][1].headers.Authorization).toBe("Bearer secret");
+  });
+
+  it("sends server-managed metadata settings and no provider/model", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      optionA: { title: "Ocean sunset", keywords: "ocean, sunset", categoryId: 11 },
+    }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    const result = await generateMetadata(
+      { baseUrl: "https://api.example.test", apiKey: "secret", keyLabel: "team", validatedAt: 1 },
+      "data:image/png;base64,AAAA",
+      "illustration",
+      { ...DEFAULT_PREFERENCES, language: "es", autoCategory: true },
+    );
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(body).not.toHaveProperty("model");
+    expect(body).not.toHaveProperty("backend");
+    expect(body.metadataSettings).toMatchObject({ language: "es", assetType: "illustration", titleMin: 80, keywordMax: 40 });
+    expect(result.category).toBe("10584");
+  });
+});

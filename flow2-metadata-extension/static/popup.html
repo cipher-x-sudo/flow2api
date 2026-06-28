@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Flow2 Metadata</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <header class="brand">
+      <img src="icons/icon48.png" alt="" />
+      <div><h1>Flow2 Metadata</h1><p>Adobe Stock metadata automation</p></div>
+    </header>
+
+    <main>
+      <section id="connectionView" class="card">
+        <h2>Connect to Flow2 API</h2>
+        <p class="muted">Processing stays locked until this managed key is validated with the <code>adobe:metadata</code> scope.</p>
+        <label>Base URL<input id="baseUrl" type="url" autocomplete="url" /></label>
+        <label>API key<input id="apiKey" type="password" autocomplete="off" placeholder="f2a_live_…" /></label>
+        <button id="connectButton" class="primary">Connect</button>
+        <p id="connectionError" class="message error" hidden></p>
+      </section>
+
+      <section id="notAdobeView" class="card" hidden>
+        <h2>Open Adobe Stock Contributor</h2>
+        <p class="muted">Flow2 Metadata works on the Uploads and Portfolio pages.</p>
+        <button id="openAdobeButton" class="primary">Open Adobe Stock</button>
+      </section>
+
+      <section id="appView" hidden>
+        <div class="connection-pill"><span id="connectionLabel"></span><button id="editConnection" class="link">Edit</button><button id="disconnectButton" class="link danger">Disconnect</button></div>
+
+        <section class="card">
+          <div class="segmented" role="group" aria-label="Processing mode">
+            <button id="uploadMode" data-mode="upload">New Uploads</button>
+            <button id="portfolioMode" data-mode="portfolio">Portfolio</button>
+          </div>
+          <label class="check"><input id="autoCategory" type="checkbox" /> Auto-select category</label>
+          <div class="grid two">
+            <label>Start index<input id="startIndex" type="number" min="1" placeholder="1" /></label>
+            <label>End index<input id="endIndex" type="number" min="1" placeholder="All" /></label>
+          </div>
+          <div class="progress-row"><strong id="processedCount">0</strong> processed <span id="successRate">0%</span></div>
+          <div class="actions"><button id="startButton" class="primary">Start Processing</button><button id="resumeButton" disabled>Resume</button><button id="stopButton" class="danger-button" disabled>Stop</button></div>
+          <p id="status" class="message">Ready to start</p>
+        </section>
+
+        <details class="card" open>
+          <summary>Metadata settings</summary>
+          <label>Language<select id="language">
+            <option value="en">English</option><option value="fr">French</option><option value="de">German</option>
+            <option value="es">Spanish</option><option value="it">Italian</option><option value="pt">Portuguese</option>
+            <option value="ja">Japanese</option><option value="pl">Polish</option><option value="ko">Korean</option>
+          </select></label>
+          <label>Background title suffix<select id="titleSuffix">
+            <option value="none">None</option><option value="transparent">Transparent background</option>
+            <option value="white">White background</option><option value="png_transparent">Transparent PNG</option>
+          </select></label>
+          <div class="grid two"><label>Title prefix<input id="titlePrefix" type="text" /></label><label>Title suffix<input id="customTitleSuffix" type="text" /></label></div>
+          <label class="check"><input id="limitsEnabled" type="checkbox" /> Use custom limits</label>
+          <div id="limits" class="grid two">
+            <label>Title min<input id="titleMin" type="number" min="1" max="195" /></label>
+            <label>Title max<input id="titleMax" type="number" min="1" max="195" /></label>
+            <label>Keywords min<input id="keywordMin" type="number" min="1" max="50" /></label>
+            <label>Keywords max<input id="keywordMax" type="number" min="1" max="50" /></label>
+          </div>
+          <label class="check"><input id="customPromptEnabled" type="checkbox" /> Add custom AI instructions</label>
+          <label id="customPromptWrap">Instructions<textarea id="customPrompt" rows="5" placeholder="Use {language}, {fileType}, and {category} placeholders if needed."></textarea></label>
+        </details>
+      </section>
+    </main>
+    <script src="popup.js"></script>
+  </body>
+</html>
