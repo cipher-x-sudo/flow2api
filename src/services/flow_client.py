@@ -4966,7 +4966,36 @@ class FlowClient:
                     token_id=token_id,
                     managed_api_key_id=managed_api_key_id,
                 )
-                self._set_request_fingerprint(None)
+                extension_user_agent = None
+                consume_user_agent = getattr(service, "consume_token_user_agent", None)
+                if callable(consume_user_agent) and ext_req_id:
+                    extension_user_agent = consume_user_agent(ext_req_id)
+                if token and extension_user_agent:
+                    self._set_request_fingerprint(
+                        {
+                            "user_agent": extension_user_agent,
+                            "accept_language": self._get_primary_accept_language(),
+                            "sec_ch_ua": self._infer_sec_ch_ua_from_user_agent(
+                                extension_user_agent
+                            ),
+                            "project_id": project_id,
+                            "origin": "https://labs.google",
+                            "referer": self._build_flow_project_page_url(project_id),
+                        }
+                    )
+                    debug_logger.log_info(
+                        "[reCAPTCHA Extension] Applied solver-tab User-Agent to request fingerprint"
+                    )
+                    await _emit_poll_task_progress(
+                        poll_task_progress,
+                        {
+                            "captcha_status": "user_agent_set",
+                            "captcha_user_agent_set": True,
+                            "captcha_provider": "extension",
+                        },
+                    )
+                else:
+                    self._set_request_fingerprint(None)
                 if ext_req_id:
                     _flow_extension_upstream_req_id.set(ext_req_id)
                 else:
