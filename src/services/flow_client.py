@@ -5234,7 +5234,8 @@ class FlowClient:
                     api_proxy_url = await self.proxy_manager.get_request_proxy_url()
                 except Exception as e:
                     debug_logger.log_warning(f"[reCAPTCHA] Failed to get proxy for API captcha: {e}")
-            # Bind solve and submit to the same deterministic browser identity and proxy.
+            # Bind solve and submit to the same proxy. The solver-provided User-Agent,
+            # when present, replaces the local fallback identity before submission.
             api_captcha_ua = self._generate_user_agent(
                 str(token_id or project_id or captcha_method)
             )
@@ -5255,7 +5256,6 @@ class FlowClient:
                 action,
                 proxy_url=api_proxy_url,
                 proxy_resolved=True,
-                user_agent=api_captcha_ua,
             )
             if api_result is None:
                 self._set_request_fingerprint(None)
@@ -5313,7 +5313,6 @@ class FlowClient:
         *,
         proxy_url: Optional[str] = None,
         proxy_resolved: bool = False,
-        user_agent: Optional[str] = None,
     ) -> Optional[tuple[str, Optional[str]]]:
         """通用API打码服务
         
@@ -5389,13 +5388,6 @@ class FlowClient:
                         "pageAction": page_action
                     }
                 }
-                effective_user_agent = str(
-                    user_agent
-                    or (self.get_request_fingerprint() or {}).get("user_agent")
-                    or self._generate_user_agent(str(project_id or method))
-                ).strip()
-                if effective_user_agent:
-                    create_data["task"]["userAgent"] = effective_user_agent
                 if min_score is not None:
                     create_data["task"]["minScore"] = min_score
 

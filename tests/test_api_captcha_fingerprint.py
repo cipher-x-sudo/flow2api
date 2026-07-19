@@ -82,7 +82,6 @@ class ApiCaptchaProviderResultTests(unittest.IsolatedAsyncioTestCase):
                 "project-1",
                 proxy_url="http://127.0.0.1:8080",
                 proxy_resolved=True,
-                user_agent="Solver UA",
             )
 
         self.assertEqual(result, ("captcha-token", PROVIDER_UA))
@@ -90,7 +89,7 @@ class ApiCaptchaProviderResultTests(unittest.IsolatedAsyncioTestCase):
             session.calls[0]["proxies"],
             {"http": "http://127.0.0.1:8080", "https": "http://127.0.0.1:8080"},
         )
-        self.assertEqual(session.calls[0]["json"]["task"]["userAgent"], "Solver UA")
+        self.assertNotIn("userAgent", session.calls[0]["json"]["task"])
 
 
 class ApiCaptchaFingerprintTests(unittest.IsolatedAsyncioTestCase):
@@ -110,14 +109,12 @@ class ApiCaptchaFingerprintTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual((token, browser_id), ("captcha-token", None))
         self.assertEqual(proxy_manager.calls, 1)
-        expected_solver_ua = client._generate_user_agent("project-1")
         client._get_api_captcha_token.assert_awaited_once_with(
             "yescaptcha",
             "project-1",
             "IMAGE_GENERATION",
             proxy_url="http://127.0.0.1:8080",
             proxy_resolved=True,
-            user_agent=expected_solver_ua,
         )
         fingerprint = client.get_request_fingerprint()
         self.assertEqual(fingerprint["proxy_url"], "http://127.0.0.1:8080")
