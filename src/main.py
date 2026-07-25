@@ -628,7 +628,6 @@ async def lifespan(app: FastAPI):
             print(f"WARN Remote browser pool prefill failed: {e}")
 
     # Start 429 auto-unban task
-    import asyncio
 
     async def request_log_cleanup_task():
         """Prune request log rows while leaving durable telemetry untouched."""
