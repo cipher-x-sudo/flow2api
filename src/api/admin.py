@@ -3982,8 +3982,56 @@ async def delete_managed_api_key(
     detail = await db.get_api_key_detail(key_id)
     if not detail:
         raise HTTPException(status_code=404, detail="Managed API key not found")
-    await db.delete_api_key(key_id)
-    return {"success": True, "message": "Managed API key deleted"}
+
+    cache_rows = await db.list_cache_files_for_api_key_cleanup(key_id)
+    cache_objects_deleted = 0
+    if cache_rows:
+        from . import routes
+
+        file_cache = getattr(getattr(routes, "generation_handler", None), "file_cache", None)
+        if file_cache is None or getattr(file_cache, "backend", None) is None:
+            raise HTTPException(status_code=503, detail="Cache storage is unavailable; managed API key was not deleted")
+        try:
+            for row in cache_rows:
+                filename = Path(str(row.get("filename") or "")).name
+                if filename and await file_cache.backend.delete(filename):
+                    cache_objects_deleted += 1
+        except Exception as exc:
+            from ..core.logger import debug_logger
+
+            debug_logger.log_error(
+                f"Managed API key cache cleanup failed: key_id={key_id}, error_type={type(exc).__name__}"
+            )
+            raise HTTPException(
+                status_code=503,
+                detail="Cache storage cleanup failed; managed API key was not deleted",
+            ) from exc
+
+    result = await db.delete_api_key(key_id)
+    if not result.get("deleted"):
+        raise HTTPException(status_code=404, detail="Managed API key not found")
+
+    worker_sessions_terminated = 0
+    try:
+        from ..services.browser_captcha_extension import ExtensionCaptchaService
+
+        extension_service = await ExtensionCaptchaService.get_instance(db=db)
+        worker_sessions_terminated = await extension_service.kill_managed_api_key_sessions(key_id)
+    except Exception as exc:
+        from ..core.logger import debug_logger
+
+        debug_logger.log_error(
+            f"Managed API key worker cleanup failed: key_id={key_id}, error_type={type(exc).__name__}"
+        )
+
+    return {
+        "success": True,
+        "message": "Managed API key deleted",
+        "key_id": key_id,
+        "cache_objects_deleted": cache_objects_deleted,
+        "worker_sessions_terminated": worker_sessions_terminated,
+        **result,
+    }
 
 
 @router.get("/api/admin/captcha-worker-keys")

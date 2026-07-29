@@ -5141,6 +5141,20 @@ class Database:
             row = await cursor.fetchone()
             return int(row[0]) if row else 0
 
+    async def list_cache_files_for_api_key_cleanup(self, api_key_id: int) -> List[Dict[str, Any]]:
+        """Return every cache object owned by a key before that key is deleted."""
+        async with self._connect() as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                """
+                SELECT * FROM cache_files
+                WHERE api_key_id = ?
+                ORDER BY id ASC
+                """,
+                (int(api_key_id),),
+            )
+            return [dict(row) for row in await cursor.fetchall()]
+
     async def list_cache_files_for_api_key_project(
         self,
         api_key_id: int,
@@ -6490,13 +6504,59 @@ class Database:
             data["endpoint_limits"] = await self.list_api_key_rate_limits(key_id)
             return data
 
-    async def delete_api_key(self, key_id: int):
+    async def delete_api_key(self, key_id: int) -> Dict[str, Any]:
+        """Delete a managed key without deleting historical generation records."""
+        key_id = int(key_id)
         async with self._connect(write=True) as db:
+            cursor = await db.execute("SELECT 1 FROM api_keys WHERE id = ? LIMIT 1", (key_id,))
+            if not await cursor.fetchone():
+                return {
+                    "deleted": False,
+                    "historical_records_detached": 0,
+                    "cache_metadata_deleted": 0,
+                    "extension_bindings_deleted": 0,
+                }
+
+            historical_records_detached = 0
+            for table_name in (
+                "projects",
+                "tasks",
+                "request_logs",
+                "runway_tasks",
+                "geminigen_tasks",
+                "api_key_audit_logs",
+            ):
+                if not await self._table_exists(db, table_name):
+                    continue
+                cursor = await db.execute(
+                    f"UPDATE {table_name} SET api_key_id = NULL WHERE api_key_id = ?",
+                    (key_id,),
+                )
+                historical_records_detached += max(0, int(cursor.rowcount or 0))
+
+            cache_metadata_deleted = 0
+            if await self._table_exists(db, "cache_files"):
+                cursor = await db.execute("DELETE FROM cache_files WHERE api_key_id = ?", (key_id,))
+                cache_metadata_deleted = max(0, int(cursor.rowcount or 0))
+
+            extension_bindings_deleted = 0
+            if await self._table_exists(db, "extension_worker_bindings"):
+                cursor = await db.execute(
+                    "DELETE FROM extension_worker_bindings WHERE api_key_id = ?",
+                    (key_id,),
+                )
+                extension_bindings_deleted = max(0, int(cursor.rowcount or 0))
+
             await db.execute("DELETE FROM api_key_accounts WHERE api_key_id = ?", (key_id,))
             await db.execute("DELETE FROM api_key_rate_limits WHERE api_key_id = ?", (key_id,))
-            await db.execute("DELETE FROM api_key_audit_logs WHERE api_key_id = ?", (key_id,))
             await db.execute("DELETE FROM api_keys WHERE id = ?", (key_id,))
             await db.commit()
+            return {
+                "deleted": True,
+                "historical_records_detached": historical_records_detached,
+                "cache_metadata_deleted": cache_metadata_deleted,
+                "extension_bindings_deleted": extension_bindings_deleted,
+            }
 
     async def count_api_key_audit_logs(self, key_id: Optional[int] = None) -> int:
         async with self._connect() as db:
