@@ -2576,6 +2576,23 @@ async def list_models(auth_ctx: AuthContext = Depends(verify_api_key_flexible)):
     return {"object": "list", "data": models}
 
 
+@router.get("/v1/generation-capacity")
+async def get_generation_capacity(auth_ctx: AuthContext = Depends(verify_api_key_flexible)):
+    """Return aggregate provider thread capacity without exposing account details."""
+    _require_geminigen_scope(auth_ctx)
+    handler = _ensure_generation_handler()
+    capacity = await handler.db.get_geminigen_generation_capacity()
+    return {
+        "object": "generation_capacity",
+        "providers": {
+            "geminigen": {
+                "image_threads": capacity["image_threads"],
+                "video_threads": capacity["video_threads"],
+            }
+        },
+    }
+
+
 @router.get("/v1/models/aliases")
 async def list_model_aliases(auth_ctx: AuthContext = Depends(verify_api_key_flexible)):
     """List simplified model aliases for generationConfig-based resolution."""

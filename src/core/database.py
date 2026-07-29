@@ -3295,6 +3295,37 @@ class Database:
             cursor = await db.execute("SELECT * FROM geminigen_accounts ORDER BY is_active DESC, id ASC")
             return [GeminiGenAccount(**dict(row)) for row in await cursor.fetchall()]
 
+    async def get_geminigen_generation_capacity(self) -> Dict[str, int]:
+        """Return finite Nexus thread totals for active credentialed GeminiGen accounts."""
+        async with self._connect() as db:
+            cursor = await db.execute(
+                """
+                SELECT
+                    COALESCE(SUM(
+                        CASE
+                            WHEN image_concurrency < 0 THEN 5
+                            WHEN image_concurrency > 0 THEN image_concurrency
+                            ELSE 0
+                        END
+                    ), 0) AS image_threads,
+                    COALESCE(SUM(
+                        CASE
+                            WHEN video_concurrency < 0 THEN 5
+                            WHEN video_concurrency > 0 THEN video_concurrency
+                            ELSE 0
+                        END
+                    ), 0) AS video_threads
+                FROM geminigen_accounts
+                WHERE is_active = 1
+                  AND TRIM(COALESCE(bearer_token, '')) != ''
+                """
+            )
+            row = await cursor.fetchone()
+            return {
+                "image_threads": max(0, int(row[0] or 0)) if row else 0,
+                "video_threads": max(0, int(row[1] or 0)) if row else 0,
+            }
+
     async def get_geminigen_account_generation_stats(
         self,
         account_ids: Optional[List[int]] = None,
