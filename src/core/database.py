@@ -408,6 +408,9 @@ class Database:
                 video_concurrency INTEGER DEFAULT 5,
                 image_in_flight INTEGER DEFAULT 0,
                 video_in_flight INTEGER DEFAULT 0,
+                image_gen_daily_limit_reset_at TIMESTAMP,
+                grok_image_daily_limit_reset_at TIMESTAMP,
+                video_daily_limit_reset_at TIMESTAMP,
                 last_status TEXT,
                 last_error TEXT,
                 last_used_at TIMESTAMP,
@@ -424,11 +427,29 @@ class Database:
                 plan_name TEXT,
                 plan_expire_at TIMESTAMP,
                 active_benefits_json TEXT,
+                is_image_gen_max BOOLEAN,
+                is_image_premium BOOLEAN,
+                image_gen_concurrent_streams INTEGER,
+                remaining_image_gen_max_daily_images INTEGER,
+                remaining_image_gen_free_daily_images INTEGER,
+                image_gen_quota_synced_at TIMESTAMP,
+                is_grok_image_max BOOLEAN,
+                grok_image_concurrent_streams INTEGER,
+                remaining_grok_image_max_daily_images INTEGER,
+                remaining_grok_image_free_daily_images INTEGER,
+                grok_image_quota_synced_at TIMESTAMP,
+                is_grok_max BOOLEAN,
+                grok_max_concurrent_streams INTEGER,
+                grok_max_quota_synced_at TIMESTAMP,
                 remaining_bulk_videos INTEGER,
                 remaining_daily_videos INTEGER,
                 remaining_grok_max_daily_videos INTEGER,
                 remaining_grok_max_daily_720p_videos INTEGER,
                 remaining_grok_max_daily_10s_videos INTEGER,
+                remaining_grok_max_daily_15s_videos INTEGER,
+                quota_synced_at TIMESTAMP,
+                quota_sync_status TEXT,
+                quota_sync_error TEXT,
                 profile_synced_at TIMESTAMP,
                 profile_sync_status TEXT,
                 profile_sync_error TEXT,
@@ -455,6 +476,8 @@ class Database:
                 request_payload TEXT,
                 response_payload TEXT,
                 error_message TEXT,
+                error_code TEXT,
+                retry_at TIMESTAMP,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 started_at TIMESTAMP,
@@ -472,6 +495,9 @@ class Database:
             ("video_concurrency", "INTEGER DEFAULT 5"),
             ("image_in_flight", "INTEGER DEFAULT 0"),
             ("video_in_flight", "INTEGER DEFAULT 0"),
+            ("image_gen_daily_limit_reset_at", "TIMESTAMP"),
+            ("grok_image_daily_limit_reset_at", "TIMESTAMP"),
+            ("video_daily_limit_reset_at", "TIMESTAMP"),
             ("profile_user_id", "INTEGER"),
             ("profile_uuid", "TEXT"),
             ("profile_email", "TEXT"),
@@ -485,11 +511,29 @@ class Database:
             ("plan_name", "TEXT"),
             ("plan_expire_at", "TIMESTAMP"),
             ("active_benefits_json", "TEXT"),
+            ("is_image_gen_max", "BOOLEAN"),
+            ("is_image_premium", "BOOLEAN"),
+            ("image_gen_concurrent_streams", "INTEGER"),
+            ("remaining_image_gen_max_daily_images", "INTEGER"),
+            ("remaining_image_gen_free_daily_images", "INTEGER"),
+            ("image_gen_quota_synced_at", "TIMESTAMP"),
+            ("is_grok_image_max", "BOOLEAN"),
+            ("grok_image_concurrent_streams", "INTEGER"),
+            ("remaining_grok_image_max_daily_images", "INTEGER"),
+            ("remaining_grok_image_free_daily_images", "INTEGER"),
+            ("grok_image_quota_synced_at", "TIMESTAMP"),
+            ("is_grok_max", "BOOLEAN"),
+            ("grok_max_concurrent_streams", "INTEGER"),
+            ("grok_max_quota_synced_at", "TIMESTAMP"),
             ("remaining_bulk_videos", "INTEGER"),
             ("remaining_daily_videos", "INTEGER"),
             ("remaining_grok_max_daily_videos", "INTEGER"),
             ("remaining_grok_max_daily_720p_videos", "INTEGER"),
             ("remaining_grok_max_daily_10s_videos", "INTEGER"),
+            ("remaining_grok_max_daily_15s_videos", "INTEGER"),
+            ("quota_synced_at", "TIMESTAMP"),
+            ("quota_sync_status", "TEXT"),
+            ("quota_sync_error", "TEXT"),
             ("profile_synced_at", "TIMESTAMP"),
             ("profile_sync_status", "TEXT"),
             ("profile_sync_error", "TEXT"),
@@ -497,6 +541,17 @@ class Database:
         for column_name, column_type in account_columns:
             if not await self._column_exists(db, "geminigen_accounts", column_name):
                 await db.execute(f"ALTER TABLE geminigen_accounts ADD COLUMN {column_name} {column_type}")
+        if await self._column_exists(db, "geminigen_accounts", "image_daily_limit_reset_at"):
+            await db.execute(
+                """
+                UPDATE geminigen_accounts
+                SET image_gen_daily_limit_reset_at = COALESCE(
+                    image_gen_daily_limit_reset_at,
+                    image_daily_limit_reset_at
+                )
+                WHERE image_daily_limit_reset_at IS NOT NULL
+                """
+            )
         config_columns = [
             ("video_enabled", "BOOLEAN DEFAULT 1"),
             ("global_image_concurrency", "INTEGER DEFAULT 5"),
@@ -507,6 +562,8 @@ class Database:
                 await db.execute(f"ALTER TABLE geminigen_config ADD COLUMN {column_name} {column_type}")
         task_columns = [
             ("request_log_id", "INTEGER"),
+            ("error_code", "TEXT"),
+            ("retry_at", "TIMESTAMP"),
         ]
         for column_name, column_type in task_columns:
             if not await self._column_exists(db, "geminigen_tasks", column_name):
@@ -3337,11 +3394,20 @@ class Database:
             "label", "raw_cookie", "bearer_token", "refresh_token", "guard_id", "turnstile_token",
             "is_active", "image_concurrency", "video_concurrency",
             "image_in_flight", "video_in_flight", "last_status", "last_error", "last_used_at",
+            "image_gen_daily_limit_reset_at", "grok_image_daily_limit_reset_at", "video_daily_limit_reset_at",
             "profile_user_id", "profile_uuid", "profile_email", "profile_full_name", "profile_is_active",
             "available_credit", "plan_credit", "purchased_credit", "locked_credit", "subscription_credit",
             "plan_name", "plan_expire_at", "active_benefits_json", "remaining_bulk_videos",
+            "is_image_gen_max", "is_image_premium", "image_gen_concurrent_streams",
+            "remaining_image_gen_max_daily_images", "remaining_image_gen_free_daily_images",
+            "image_gen_quota_synced_at",
+            "is_grok_image_max", "grok_image_concurrent_streams",
+            "remaining_grok_image_max_daily_images", "remaining_grok_image_free_daily_images",
+            "grok_image_quota_synced_at", "is_grok_max", "grok_max_concurrent_streams",
+            "grok_max_quota_synced_at",
             "remaining_daily_videos", "remaining_grok_max_daily_videos",
             "remaining_grok_max_daily_720p_videos", "remaining_grok_max_daily_10s_videos",
+            "remaining_grok_max_daily_15s_videos", "quota_synced_at", "quota_sync_status", "quota_sync_error",
             "profile_synced_at", "profile_sync_status", "profile_sync_error",
         }
         updates = []
@@ -3353,12 +3419,18 @@ class Database:
                 value = int(bool(value))
             if key == "profile_is_active" and value is not None:
                 value = int(bool(value))
+            if key in {"is_image_gen_max", "is_image_premium", "is_grok_image_max", "is_grok_max"} and value is not None:
+                value = int(bool(value))
             if key in {
                 "image_concurrency", "video_concurrency", "image_in_flight", "video_in_flight",
                 "profile_user_id", "available_credit", "plan_credit", "purchased_credit", "locked_credit",
                 "subscription_credit", "remaining_bulk_videos", "remaining_daily_videos",
                 "remaining_grok_max_daily_videos", "remaining_grok_max_daily_720p_videos",
-                "remaining_grok_max_daily_10s_videos",
+                "remaining_grok_max_daily_10s_videos", "remaining_grok_max_daily_15s_videos",
+                "image_gen_concurrent_streams", "remaining_image_gen_max_daily_images",
+                "remaining_image_gen_free_daily_images", "grok_image_concurrent_streams",
+                "remaining_grok_image_max_daily_images", "remaining_grok_image_free_daily_images",
+                "grok_max_concurrent_streams",
             } and value is not None:
                 value = int(value)
             updates.append(f"{key} = ?")
@@ -3394,14 +3466,25 @@ class Database:
             await db.commit()
             return True
 
+    @staticmethod
+    def _geminigen_daily_limit_column(kind: str, endpoint_type: Optional[str] = None) -> str:
+        endpoint = str(endpoint_type or "").strip().lower()
+        if endpoint == "grok-image":
+            return "grok_image_daily_limit_reset_at"
+        if endpoint == "veo-video" or str(kind or "").lower() == "video":
+            return "video_daily_limit_reset_at"
+        return "image_gen_daily_limit_reset_at"
+
     async def acquire_geminigen_account(
         self,
         kind: str,
         excluded_account_ids: Optional[List[int]] = None,
+        endpoint_type: Optional[str] = None,
     ) -> Optional[GeminiGenAccount]:
         is_video = str(kind or "").lower() == "video"
         limit_col = "video_concurrency" if is_video else "image_concurrency"
         inflight_col = "video_in_flight" if is_video else "image_in_flight"
+        daily_limit_col = self._geminigen_daily_limit_column(kind, endpoint_type)
         excluded = [int(account_id) for account_id in (excluded_account_ids or []) if account_id]
         exclusion_clause = ""
         params: List[Any] = []
@@ -3416,6 +3499,7 @@ class Database:
                 SELECT * FROM geminigen_accounts
                 WHERE is_active = 1
                   AND TRIM(COALESCE(bearer_token, '')) != ''
+                  AND ({daily_limit_col} IS NULL OR {daily_limit_col} <= CURRENT_TIMESTAMP)
                   AND ({limit_col} < 0 OR {inflight_col} < {limit_col})
                   {exclusion_clause}
                 ORDER BY COALESCE(last_used_at, '1970-01-01 00:00:00') ASC, id ASC
@@ -3443,6 +3527,98 @@ class Database:
             else:
                 account.image_in_flight += 1
             return account
+
+    async def get_geminigen_daily_limit_pool_state(
+        self,
+        kind: str,
+        endpoint_type: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Summarize persisted daily-limit eligibility for active credentialed accounts."""
+        daily_limit_col = self._geminigen_daily_limit_column(kind, endpoint_type)
+        async with self._connect() as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                f"""
+                SELECT
+                    COUNT(*) AS account_count,
+                    COALESCE(SUM(
+                        CASE WHEN {daily_limit_col} > CURRENT_TIMESTAMP THEN 1 ELSE 0 END
+                    ), 0) AS daily_limited_count,
+                    MIN(
+                        CASE WHEN {daily_limit_col} > CURRENT_TIMESTAMP
+                             THEN {daily_limit_col} ELSE NULL END
+                    ) AS earliest_reset_at
+                FROM geminigen_accounts
+                WHERE is_active = 1
+                  AND TRIM(COALESCE(bearer_token, '')) != ''
+                """
+            )
+            row = await cursor.fetchone()
+            return {
+                "account_count": int(row["account_count"] or 0) if row else 0,
+                "daily_limited_count": int(row["daily_limited_count"] or 0) if row else 0,
+                "earliest_reset_at": row["earliest_reset_at"] if row else None,
+            }
+
+    async def decrement_geminigen_cached_quota(self, account_id: int, endpoint_type: str) -> bool:
+        """Atomically decrement a same-day cached image quota after submission."""
+        endpoint = str(endpoint_type or "").strip().lower()
+        quota_columns = {
+            "imagen": (
+                "is_image_gen_max",
+                "remaining_image_gen_max_daily_images",
+                "remaining_image_gen_free_daily_images",
+                "image_gen_daily_limit_reset_at",
+                "daily_limited_image_gen",
+                "image_gen_quota_synced_at",
+            ),
+            "grok-image": (
+                "is_grok_image_max",
+                "remaining_grok_image_max_daily_images",
+                "remaining_grok_image_free_daily_images",
+                "grok_image_daily_limit_reset_at",
+                "daily_limited_grok_image",
+                "grok_image_quota_synced_at",
+            ),
+        }
+        columns = quota_columns.get(endpoint)
+        if not columns:
+            return False
+        flag_col, max_remaining_col, free_remaining_col, reset_col, limited_status, synced_col = columns
+        async with self._connect(write=True) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                f"SELECT {flag_col} FROM geminigen_accounts WHERE id = ?",
+                (int(account_id),),
+            )
+            row = await cursor.fetchone()
+            if not row:
+                return False
+            remaining_col = max_remaining_col if bool(row[flag_col]) else free_remaining_col
+            cursor = await db.execute(
+                f"""
+                UPDATE geminigen_accounts
+                SET {remaining_col} = {remaining_col} - 1,
+                    {reset_col} = CASE
+                        WHEN {remaining_col} = 1 THEN datetime(date('now', '+1 day'))
+                        ELSE {reset_col}
+                    END,
+                    last_status = CASE
+                        WHEN {remaining_col} = 1 THEN ? ELSE last_status
+                    END,
+                    last_error = CASE
+                        WHEN {remaining_col} = 1 THEN 'DAILY_LIMIT_EXCEEDED' ELSE last_error
+                    END,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                  AND DATE({synced_col}) = DATE('now')
+                  AND {remaining_col} IS NOT NULL
+                  AND {remaining_col} > 0
+                """,
+                (limited_status, int(account_id)),
+            )
+            await db.commit()
+            return int(cursor.rowcount or 0) > 0
 
     async def release_geminigen_account(self, account_id: Optional[int], kind: str) -> None:
         if not account_id:
@@ -3647,9 +3823,9 @@ class Database:
                     job_id, upstream_uuid, account_id, api_key_id, request_log_id, public_model_id, kind,
                     endpoint_type, prompt, status, progress, raw_artifact_urls,
                     cached_artifact_urls, request_payload, response_payload, error_message,
-                    started_at, completed_at
+                    error_code, retry_at, started_at, completed_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     task.job_id,
@@ -3668,6 +3844,8 @@ class Database:
                     task.request_payload,
                     task.response_payload,
                     task.error_message,
+                    task.error_code,
+                    task.retry_at,
                     task.started_at,
                     task.completed_at,
                 ),
@@ -3703,7 +3881,7 @@ class Database:
             "upstream_uuid", "account_id", "api_key_id", "request_log_id", "public_model_id", "kind",
             "endpoint_type", "prompt", "status", "progress", "raw_artifact_urls",
             "cached_artifact_urls", "request_payload", "response_payload",
-            "error_message", "started_at", "completed_at",
+            "error_message", "error_code", "retry_at", "started_at", "completed_at",
         }
         updates = []
         params = []

@@ -38,7 +38,11 @@ from ..services.token_manager import TokenManager
 from ..services.proxy_manager import ProxyManager
 from ..services.concurrency_manager import ConcurrencyManager
 from ..services.runway_service import RunwayService
-from ..services.geminigen_service import GeminiGenService
+from ..services.geminigen_service import (
+    GEMINIGEN_GROK_IMAGE_MAX_DAILY,
+    GEMINIGEN_IMAGE_GEN_MAX_DAILY,
+    GeminiGenService,
+)
 from ..services.generation_handler import MODEL_CONFIG
 from ..services.browser_profile_service import BrowserProfileService
 from ..services.browser_metrics_cleanup import get_last_browser_metrics_cleanup_stats
@@ -2516,6 +2520,75 @@ def _geminigen_account_payload(account, generation_stats: Optional[Dict[str, int
         except Exception:
             active_benefits = []
     generation_stats = generation_stats or {}
+    now_utc = datetime.now(timezone.utc)
+
+    def daily_limit_state(value: Optional[datetime]) -> tuple[bool, Optional[str]]:
+        if not value:
+            return False, None
+        normalized = (
+            value.replace(tzinfo=timezone.utc)
+            if value.tzinfo is None
+            else value.astimezone(timezone.utc)
+        )
+        return normalized > now_utc, normalized.isoformat().replace("+00:00", "Z")
+
+    image_gen_daily_limited, image_gen_daily_limit_reset_at = daily_limit_state(
+        getattr(account, "image_gen_daily_limit_reset_at", None)
+    )
+    grok_image_daily_limited, grok_image_daily_limit_reset_at = daily_limit_state(
+        getattr(account, "grok_image_daily_limit_reset_at", None)
+    )
+    video_daily_limited, video_daily_limit_reset_at = daily_limit_state(
+        getattr(account, "video_daily_limit_reset_at", None)
+    )
+    last_status = account.last_status or ""
+    last_error = account.last_error or ""
+    if (
+        last_error == "DAILY_LIMIT_EXCEEDED"
+        and last_status.startswith("daily_limited_")
+        and not image_gen_daily_limited
+        and not grok_image_daily_limited
+        and not video_daily_limited
+    ):
+        last_status = ""
+        last_error = ""
+
+    def quota_summary(
+        *,
+        is_max: Optional[bool],
+        max_remaining: Optional[int],
+        free_remaining: Optional[int],
+        max_total: int,
+    ) -> Dict[str, Any]:
+        if is_max is True and max_remaining is not None:
+            remaining = max(0, int(max_remaining))
+            return {
+                "tier": "max",
+                "remaining": remaining,
+                "used": max(0, min(max_total, max_total - remaining)),
+                "max": max_total,
+            }
+        if free_remaining is not None:
+            return {
+                "tier": "free",
+                "remaining": max(0, int(free_remaining)),
+                "used": None,
+                "max": None,
+            }
+        return {"tier": "unknown", "remaining": None, "used": None, "max": None}
+
+    image_gen_quota = quota_summary(
+        is_max=getattr(account, "is_image_gen_max", None),
+        max_remaining=getattr(account, "remaining_image_gen_max_daily_images", None),
+        free_remaining=getattr(account, "remaining_image_gen_free_daily_images", None),
+        max_total=GEMINIGEN_IMAGE_GEN_MAX_DAILY,
+    )
+    grok_image_quota = quota_summary(
+        is_max=getattr(account, "is_grok_image_max", None),
+        max_remaining=getattr(account, "remaining_grok_image_max_daily_images", None),
+        free_remaining=getattr(account, "remaining_grok_image_free_daily_images", None),
+        max_total=GEMINIGEN_GROK_IMAGE_MAX_DAILY,
+    )
     return {
         "id": account.id,
         "label": account.label,
@@ -2534,12 +2607,47 @@ def _geminigen_account_payload(account, generation_stats: Optional[Dict[str, int
         "video_concurrency": account.video_concurrency,
         "image_in_flight": account.image_in_flight,
         "video_in_flight": account.video_in_flight,
+        "image_gen_daily_limited": image_gen_daily_limited,
+        "grok_image_daily_limited": grok_image_daily_limited,
+        "video_daily_limited": video_daily_limited,
+        "image_gen_daily_limit_reset_at": image_gen_daily_limit_reset_at,
+        "grok_image_daily_limit_reset_at": grok_image_daily_limit_reset_at,
+        "video_daily_limit_reset_at": video_daily_limit_reset_at,
+        "image_gen_quota": image_gen_quota,
+        "grok_image_quota": grok_image_quota,
+        "is_image_gen_max": getattr(account, "is_image_gen_max", None),
+        "is_image_premium": getattr(account, "is_image_premium", None),
+        "image_gen_concurrent_streams": getattr(account, "image_gen_concurrent_streams", None),
+        "remaining_image_gen_max_daily_images": getattr(
+            account,
+            "remaining_image_gen_max_daily_images",
+            None,
+        ),
+        "remaining_image_gen_free_daily_images": getattr(
+            account,
+            "remaining_image_gen_free_daily_images",
+            None,
+        ),
+        "is_grok_image_max": getattr(account, "is_grok_image_max", None),
+        "grok_image_concurrent_streams": getattr(account, "grok_image_concurrent_streams", None),
+        "remaining_grok_image_max_daily_images": getattr(
+            account,
+            "remaining_grok_image_max_daily_images",
+            None,
+        ),
+        "remaining_grok_image_free_daily_images": getattr(
+            account,
+            "remaining_grok_image_free_daily_images",
+            None,
+        ),
+        "is_grok_max": getattr(account, "is_grok_max", None),
+        "grok_max_concurrent_streams": getattr(account, "grok_max_concurrent_streams", None),
         "image_generated_today": int(generation_stats.get("image_generated_today") or 0),
         "image_generated_total": int(generation_stats.get("image_generated_total") or 0),
         "video_generated_today": int(generation_stats.get("video_generated_today") or 0),
         "video_generated_total": int(generation_stats.get("video_generated_total") or 0),
-        "last_status": account.last_status or "",
-        "last_error": account.last_error or "",
+        "last_status": last_status,
+        "last_error": last_error,
         "last_used_at": account.last_used_at.isoformat() if account.last_used_at else None,
         "profile_user_id": account.profile_user_id,
         "profile_uuid": account.profile_uuid,
@@ -2559,6 +2667,10 @@ def _geminigen_account_payload(account, generation_stats: Optional[Dict[str, int
         "remaining_grok_max_daily_videos": account.remaining_grok_max_daily_videos,
         "remaining_grok_max_daily_720p_videos": account.remaining_grok_max_daily_720p_videos,
         "remaining_grok_max_daily_10s_videos": account.remaining_grok_max_daily_10s_videos,
+        "remaining_grok_max_daily_15s_videos": account.remaining_grok_max_daily_15s_videos,
+        "quota_synced_at": account.quota_synced_at.isoformat() if account.quota_synced_at else None,
+        "quota_sync_status": account.quota_sync_status or "",
+        "quota_sync_error": account.quota_sync_error or "",
         "profile_synced_at": account.profile_synced_at.isoformat() if account.profile_synced_at else None,
         "profile_sync_status": account.profile_sync_status or "",
         "profile_sync_error": account.profile_sync_error or "",
