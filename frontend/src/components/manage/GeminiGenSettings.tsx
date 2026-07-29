@@ -212,6 +212,60 @@ function geminiGenVideoQuota(account: GeminiGenAccount) {
   return quotas.length ? quotas.join(" / ") : "-"
 }
 
+function geminiGenImageQuotaTotal(
+  accounts: GeminiGenAccount[],
+  getQuota: (account: GeminiGenAccount) => GeminiGenQuotaSummary | undefined,
+) {
+  let used = 0
+  let max = 0
+  let hasUsed = false
+  let hasMax = false
+  let remainingOnly = 0
+  let hasRemainingOnly = false
+
+  accounts.forEach((account) => {
+    const quota = getQuota(account)
+    const quotaHasUsed = quota?.used !== null && quota?.used !== undefined
+    const quotaHasMax = quota?.max !== null && quota?.max !== undefined
+
+    if (quotaHasUsed) {
+      used += quota.used || 0
+      hasUsed = true
+    }
+    if (quotaHasMax) {
+      max += quota.max || 0
+      hasMax = true
+    }
+    if (!quotaHasUsed && !quotaHasMax && quota?.remaining !== null && quota?.remaining !== undefined) {
+      remainingOnly += quota.remaining
+      hasRemainingOnly = true
+    }
+  })
+
+  const totals = []
+  if (hasUsed || hasMax) {
+    totals.push(`${hasUsed ? formatNumberValue(used) : "-"} / ${hasMax ? formatNumberValue(max) : "-"}`)
+  }
+  if (hasRemainingOnly) totals.push(`${formatNumberValue(remainingOnly)} remaining`)
+  return totals.length ? totals.join(" + ") : "-"
+}
+
+function geminiGenVideoQuotaTotal(accounts: GeminiGenAccount[]) {
+  const quotaFields: Array<{ label: string; key: keyof GeminiGenAccount }> = [
+    { label: "Daily", key: "remaining_daily_videos" },
+    { label: "Bulk", key: "remaining_bulk_videos" },
+    { label: "Grok", key: "remaining_grok_max_daily_videos" },
+    { label: "15s", key: "remaining_grok_max_daily_15s_videos" },
+  ]
+  const quotas = quotaFields.flatMap(({ label, key }) => {
+    const values = accounts
+      .map((account) => account[key])
+      .filter((value): value is number => typeof value === "number")
+    return values.length ? [`${label} ${formatNumberValue(values.reduce((sum, value) => sum + value, 0))}`] : []
+  })
+  return quotas.length ? quotas.join(" / ") : "-"
+}
+
 const EMPTY_ACCOUNT: AccountDraft = {
   label: "",
   bearer_token: "",
@@ -265,6 +319,9 @@ export function GeminiGenSettings({ active }: { active: boolean }) {
       accounts: accounts.length,
       active: accounts.filter((account) => account.is_active).length,
       models: models.length,
+      imagenQuota: geminiGenImageQuotaTotal(accounts, (account) => account.image_gen_quota),
+      grokImageQuota: geminiGenImageQuotaTotal(accounts, (account) => account.grok_image_quota),
+      videoQuota: geminiGenVideoQuotaTotal(accounts),
     }
   }, [accounts, models])
 
@@ -438,6 +495,18 @@ export function GeminiGenSettings({ active }: { active: boolean }) {
           <div className="rounded-md border bg-muted/20 px-3 py-2">
             <div className="text-xs text-muted-foreground">Models</div>
             <div className="text-lg font-semibold tabular-nums">{stats.models}</div>
+          </div>
+          <div className="rounded-md border bg-muted/20 px-3 py-2">
+            <div className="text-xs text-muted-foreground">Imagen quota</div>
+            <div className="text-lg font-semibold tabular-nums">{stats.imagenQuota}</div>
+          </div>
+          <div className="rounded-md border bg-muted/20 px-3 py-2">
+            <div className="text-xs text-muted-foreground">Grok Image quota</div>
+            <div className="text-lg font-semibold tabular-nums">{stats.grokImageQuota}</div>
+          </div>
+          <div className="rounded-md border bg-muted/20 px-3 py-2">
+            <div className="text-xs text-muted-foreground">Video quotas</div>
+            <div className="text-lg font-semibold leading-snug tabular-nums">{stats.videoQuota}</div>
           </div>
         </CardContent>
       </Card>
