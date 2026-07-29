@@ -168,6 +168,7 @@ export function GeminiGenSettings({ active }: { active: boolean }) {
   const [draft, setDraft] = useState<AccountDraft>(EMPTY_ACCOUNT)
   const [dialogOpen, setDialogOpen] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [updatingAccountIds, setUpdatingAccountIds] = useState<Set<number>>(new Set())
   const [statusLoading, setStatusLoading] = useState(false)
   const [modelStatus, setModelStatus] = useState<GeminiGenStatusResponse | null>(null)
 
@@ -272,13 +273,26 @@ export function GeminiGenSettings({ active }: { active: boolean }) {
     }
   }
 
-  const patchAccount = async (account: GeminiGenAccount, patch: Partial<GeminiGenAccount>) => {
-    const r = await adminFetch(`/api/admin/geminigen/accounts/${account.id}`, token, {
-      method: "PATCH",
-      body: JSON.stringify(patch),
-    })
-    if (r?.ok) await load()
-    else toast.error("Could not update account")
+  const setAccountEnabled = async (account: GeminiGenAccount, is_active: boolean) => {
+    setUpdatingAccountIds((current) => new Set(current).add(account.id))
+    try {
+      const r = await adminFetch(`/api/admin/geminigen/accounts/${account.id}`, token, {
+        method: "PATCH",
+        body: JSON.stringify({ is_active }),
+      })
+      const d = await r?.json().catch(() => null)
+      if (!r?.ok) throw new Error(d?.detail || "Could not update account")
+      toast.success(is_active ? "GeminiGen account enabled" : "GeminiGen account disabled for new jobs")
+      await Promise.all([load(), loadStatus()])
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not update account")
+    } finally {
+      setUpdatingAccountIds((current) => {
+        const next = new Set(current)
+        next.delete(account.id)
+        return next
+      })
+    }
   }
 
   const testAccount = async (account: GeminiGenAccount) => {
@@ -293,10 +307,13 @@ export function GeminiGenSettings({ active }: { active: boolean }) {
     if (!window.confirm(`Delete GeminiGen account "${account.label}"?`)) return
     const r = await adminFetch(`/api/admin/geminigen/accounts/${account.id}`, token, { method: "DELETE" })
     if (r?.ok) {
-      toast.success("GeminiGen account deleted")
-      await load()
+      const d = await r.json().catch(() => null)
+      const cancelled = Number(d?.tasks_cleared || 0)
+      toast.success(cancelled ? `GeminiGen account deleted; ${cancelled} active job(s) cancelled` : "GeminiGen account deleted")
+      await Promise.all([load(), loadStatus()])
     } else {
-      toast.error("Could not delete account")
+      const d = await r?.json().catch(() => null)
+      toast.error(d?.detail || "Could not delete account")
     }
   }
 
@@ -524,13 +541,21 @@ export function GeminiGenSettings({ active }: { active: boolean }) {
                     ) : null}
                   </TableCell>
                   <TableCell>
-                    {!account.is_active ? (
-                      <Badge variant="outline">disabled</Badge>
-                    ) : account.profile_is_active === false ? (
-                      <Badge variant="outline">inactive</Badge>
-                    ) : (
-                      <Badge>enabled</Badge>
-                    )}
+                    <div className="flex items-center gap-2">
+                      <Switch
+                        checked={account.is_active}
+                        disabled={updatingAccountIds.has(account.id)}
+                        onCheckedChange={(enabled) => void setAccountEnabled(account, enabled)}
+                        aria-label={`${account.is_active ? "Disable" : "Enable"} ${account.label}`}
+                      />
+                      {!account.is_active ? (
+                        <Badge variant="outline">disabled</Badge>
+                      ) : account.profile_is_active === false ? (
+                        <Badge variant="outline">inactive</Badge>
+                      ) : (
+                        <Badge>enabled</Badge>
+                      )}
+                    </div>
                   </TableCell>
                   <TableCell className="text-xs whitespace-nowrap">
                     <div className="font-medium tabular-nums">{formatNumberValue(account.available_credit)}</div>
@@ -568,9 +593,6 @@ export function GeminiGenSettings({ active }: { active: boolean }) {
                         <CheckCircle2 className="h-4 w-4" />
                       </Button>
                       <Button size="icon" variant="ghost" onClick={() => clearAccountSlots(account)} title="Clear slots">
-                        <RefreshCw className="h-4 w-4" />
-                      </Button>
-                      <Button size="icon" variant="ghost" onClick={() => patchAccount(account, { is_active: !account.is_active })} title="Toggle">
                         <RefreshCw className="h-4 w-4" />
                       </Button>
                       <Button size="icon" variant="ghost" onClick={() => openEdit(account)} title="Edit">

@@ -3017,8 +3017,17 @@ async def delete_geminigen_account(
     account_id: int,
     token: str = Depends(verify_admin_token),
 ):
-    await db.delete_geminigen_account(account_id)
-    return {"success": True, "account_id": account_id}
+    account = await db.get_geminigen_account(account_id)
+    if not account:
+        raise HTTPException(status_code=404, detail="GeminiGen account not found")
+    cleared = await db.clear_geminigen_queue(
+        account_id=account_id,
+        reason="GeminiGen account deleted by admin",
+    )
+    deleted = await db.delete_geminigen_account(account_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="GeminiGen account not found")
+    return {"success": True, "account_id": account_id, **cleared}
 
 
 @router.post("/api/admin/geminigen/queue/clear")

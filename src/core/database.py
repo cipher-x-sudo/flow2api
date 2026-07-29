@@ -3371,10 +3371,28 @@ class Database:
             await db.execute(f"UPDATE geminigen_accounts SET {', '.join(updates)} WHERE id = ?", params)
             await db.commit()
 
-    async def delete_geminigen_account(self, account_id: int) -> None:
+    async def delete_geminigen_account(self, account_id: int) -> bool:
         async with self._connect(write=True) as db:
+            cursor = await db.execute(
+                "SELECT 1 FROM geminigen_accounts WHERE id = ? LIMIT 1",
+                (int(account_id),),
+            )
+            if not await cursor.fetchone():
+                return False
+            # Keep completed/cancelled task history while removing the credential.
+            # The nullable foreign key must be detached before deleting the account.
+            await db.execute(
+                """
+                UPDATE geminigen_tasks
+                SET account_id = NULL,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE account_id = ?
+                """,
+                (int(account_id),),
+            )
             await db.execute("DELETE FROM geminigen_accounts WHERE id = ?", (int(account_id),))
             await db.commit()
+            return True
 
     async def acquire_geminigen_account(
         self,

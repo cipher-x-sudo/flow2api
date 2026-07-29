@@ -561,6 +561,132 @@ def test_geminigen_image_capacity_uses_sum_of_account_slots_not_default_global_c
     assert all(account.image_in_flight <= account.image_concurrency for account in accounts)
 
 
+def test_geminigen_disabled_account_is_excluded_from_pool_capacity():
+    async def run():
+        tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        tmp.close()
+        db = Database(tmp.name)
+        try:
+            await db.init_db()
+            enabled_ids = [
+                await db.create_geminigen_account(
+                    label=f"enabled-{index}",
+                    raw_cookie="",
+                    bearer_token=f"token-{index}",
+                    image_concurrency=5,
+                )
+                for index in range(2)
+            ]
+            disabled_id = await db.create_geminigen_account(
+                label="disabled",
+                raw_cookie="",
+                bearer_token="disabled-token",
+                is_active=False,
+                image_concurrency=5,
+            )
+
+            acquired = [await db.acquire_geminigen_account("image") for _ in range(10)]
+            blocked = await db.acquire_geminigen_account("image")
+            accounts = {
+                account_id: await db.get_geminigen_account(account_id)
+                for account_id in [*enabled_ids, disabled_id]
+            }
+            return acquired, blocked, accounts, enabled_ids, disabled_id
+        finally:
+            os.unlink(tmp.name)
+
+    acquired, blocked, accounts, enabled_ids, disabled_id = asyncio.run(run())
+
+    assert len([account for account in acquired if account is not None]) == 10
+    assert {account.id for account in acquired} == set(enabled_ids)
+    assert blocked is None
+    assert sorted(accounts[account_id].image_in_flight for account_id in enabled_ids) == [5, 5]
+    assert accounts[disabled_id].image_in_flight == 0
+
+
+def test_geminigen_account_delete_preserves_task_history_without_foreign_key_error():
+    async def run():
+        tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        tmp.close()
+        db = Database(tmp.name)
+        try:
+            await db.init_db()
+            account_id = await db.create_geminigen_account(
+                label="delete-me",
+                raw_cookie="",
+                bearer_token="token",
+            )
+            await db.create_geminigen_task(
+                GeminiGenTask(
+                    job_id="geminigen-delete-history",
+                    account_id=account_id,
+                    public_model_id="geminigen-nano-banana-pro-image-landscape-1k",
+                    kind="image",
+                    endpoint_type="imagen",
+                    status="completed",
+                )
+            )
+
+            deleted = await db.delete_geminigen_account(account_id)
+            account = await db.get_geminigen_account(account_id)
+            task = await db.get_geminigen_task("geminigen-delete-history")
+            return deleted, account, task
+        finally:
+            os.unlink(tmp.name)
+
+    deleted, account, task = asyncio.run(run())
+
+    assert deleted is True
+    assert account is None
+    assert task is not None
+    assert task.account_id is None
+
+
+def test_geminigen_admin_delete_cancels_assigned_jobs_before_removing_account():
+    async def run():
+        from src.api import admin as admin_routes
+
+        tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        tmp.close()
+        db = Database(tmp.name)
+        previous_db = admin_routes.db
+        try:
+            await db.init_db()
+            account_id = await db.create_geminigen_account(
+                label="delete-active",
+                raw_cookie="",
+                bearer_token="token",
+            )
+            await db.update_geminigen_account(account_id, image_in_flight=1)
+            await db.create_geminigen_task(
+                GeminiGenTask(
+                    job_id="geminigen-delete-active",
+                    account_id=account_id,
+                    public_model_id="geminigen-nano-banana-pro-image-landscape-1k",
+                    kind="image",
+                    endpoint_type="imagen",
+                    status="processing",
+                )
+            )
+            admin_routes.db = db
+
+            result = await admin_routes.delete_geminigen_account(account_id, token="admin-token")
+            account = await db.get_geminigen_account(account_id)
+            task = await db.get_geminigen_task("geminigen-delete-active")
+            return result, account, task
+        finally:
+            admin_routes.db = previous_db
+            os.unlink(tmp.name)
+
+    result, account, task = asyncio.run(run())
+
+    assert result["success"] is True
+    assert result["tasks_cleared"] == 1
+    assert account is None
+    assert task.status == "cancelled"
+    assert task.account_id is None
+
+
 def test_geminigen_video_capacity_is_independent_from_image_slots():
     async def run():
         tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
