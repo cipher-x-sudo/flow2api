@@ -14,6 +14,7 @@ from fastapi import HTTPException
 
 from src.core.database import Database
 from src.core.config import config
+from src.core.api_key_manager import AuthContext
 from src.services.cloning_metadata_service import (
     _cloning_remaining_timeout,
     _ensure_meaningful_image_prompt,
@@ -2281,6 +2282,114 @@ def test_geminigen_poll_does_not_query_history_while_submission_is_in_flight():
 
     assert result.status == "processing"
     assert result.upstream_uuid is None
+
+
+def test_geminigen_passive_status_reads_do_not_poll_or_write(monkeypatch):
+    task = GeminiGenTask(
+        job_id="geminigen-passive",
+        api_key_id=42,
+        public_model_id="geminigen-nano-banana-pro-image-landscape-1k",
+        kind="image",
+        endpoint_type="imagen",
+        prompt="status",
+        status="processing",
+        progress=5,
+        upstream_uuid="upstream-uuid",
+    )
+
+    class PassiveDb:
+        def __init__(self):
+            self.reads = 0
+            self.writes = 0
+
+        async def get_geminigen_task(self, job_id):
+            self.reads += 1
+            return task
+
+    db = PassiveDb()
+    poll_task = AsyncMock(side_effect=AssertionError("status reads must not poll GeminiGen"))
+    service = SimpleNamespace(
+        db=db,
+        poll_task=poll_task,
+        task_to_public_dict=GeminiGenService.task_to_public_dict,
+    )
+    monkeypatch.setattr(routes, "geminigen_service", service)
+
+    def unexpected_generic_lookup():
+        raise AssertionError("GeminiGen-prefixed jobs must bypass the generic task table")
+
+    monkeypatch.setattr(routes, "_ensure_generation_handler", unexpected_generic_lookup)
+    auth = AuthContext(
+        key_id=42,
+        key_label="test",
+        is_legacy=False,
+        allowed_accounts=set(),
+        scopes={"generate:geminigen"},
+    )
+
+    async def read_twenty():
+        return await asyncio.gather(
+            *(routes.get_job_status("geminigen-passive", None, auth) for _ in range(20))
+        )
+
+    results = asyncio.run(read_twenty())
+
+    assert len(results) == 20
+    assert all(result["status"] == "processing" for result in results)
+    assert db.reads == 20
+    assert db.writes == 0
+    poll_task.assert_not_awaited()
+
+
+def test_geminigen_unchanged_processing_poll_skips_database_and_request_log_writes():
+    db = FakeGeminiGenDatabase()
+    db.task = db.task.model_copy(
+        update={
+            "status": "processing",
+            "account_id": 1,
+            "upstream_uuid": "upstream-uuid",
+            "progress": 5,
+            "response_payload": json.dumps({"status": "1", "status_percentage": 5}),
+        }
+    )
+    service = build_capacity_test_service(db)
+    request_log_update = AsyncMock()
+    service._update_request_log = request_log_update
+
+    async def get_history(**kwargs):
+        return {"status": "1", "status_percentage": 5}
+
+    service._get_history = get_history
+    result = asyncio.run(service.poll_task("geminigen-test", api_key_id=None, base_url="https://flow.example"))
+
+    assert result.status == "processing"
+    assert result.progress == 5
+    assert db.task_updates == []
+    request_log_update.assert_not_awaited()
+
+
+def test_geminigen_background_completion_is_claimed_once():
+    service = object.__new__(GeminiGenService)
+    service._background_completion_jobs = set()
+    service._background_completion_lock = asyncio.Lock()
+    wait_for_task = AsyncMock()
+
+    async def wait_once(*args, **kwargs):
+        await asyncio.sleep(0.01)
+
+    wait_for_task.side_effect = wait_once
+    service.wait_for_task = wait_for_task
+
+    async def run_duplicate_workers():
+        await asyncio.gather(
+            service.complete_task_in_background("geminigen-test", api_key_id=1, base_url=None),
+            service.complete_task_in_background("geminigen-test", api_key_id=1, base_url=None),
+        )
+
+    asyncio.run(run_duplicate_workers())
+
+    wait_for_task.assert_awaited_once()
+    assert service._background_completion_jobs == set()
 
 
 def test_geminigen_poll_respects_global_cache_kill_switch():

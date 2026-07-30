@@ -86,6 +86,26 @@ class GeminiGenService:
         self._capacity_cooldown_attempts: Dict[Tuple[int, str], int] = {}
         self._finalize_locks: Dict[str, asyncio.Lock] = {}
         self._profile_refreshing_account_ids: set[int] = set()
+        self._background_completion_jobs: set[str] = set()
+        self._background_completion_lock = asyncio.Lock()
+
+    async def _claim_background_completion(self, job_id: str) -> bool:
+        """Allow only one in-process completion loop to own a GeminiGen job."""
+        normalized = str(job_id or "").strip()
+        if not normalized:
+            return False
+        async with self._background_completion_lock:
+            if normalized in self._background_completion_jobs:
+                return False
+            self._background_completion_jobs.add(normalized)
+            return True
+
+    async def _release_background_completion(self, job_id: str) -> None:
+        normalized = str(job_id or "").strip()
+        if not normalized:
+            return
+        async with self._background_completion_lock:
+            self._background_completion_jobs.discard(normalized)
 
     @staticmethod
     def is_geminigen_model(model: str) -> bool:
@@ -1520,6 +1540,8 @@ class GeminiGenService:
         base_url: Optional[str],
     ) -> None:
         """Wait for capacity, submit a queued task, then poll it to completion."""
+        if not await self._claim_background_completion(job_id):
+            return
         started_at = time.perf_counter()
         try:
             task = await self.db.get_geminigen_task(job_id)
@@ -1535,6 +1557,8 @@ class GeminiGenService:
             await self.wait_for_task(job_id, api_key_id=api_key_id, base_url=base_url)
         except Exception as exc:
             debug_logger.log_warning(f"GeminiGen queued background task failed for {job_id}: {exc}")
+        finally:
+            await self._release_background_completion(job_id)
 
     async def _start_queued_task(
         self,
@@ -1915,20 +1939,35 @@ class GeminiGenService:
                 await self.db.release_geminigen_account(task.account_id, task.kind)
             else:
                 next_progress = self._history_progress(payload, task.progress)
-                await self.db.update_geminigen_task(job_id, status="processing", progress=next_progress, response_payload=json.dumps(payload, ensure_ascii=False))
-                await self._update_request_log(
-                    task.request_log_id,
-                    status_text="geminigen_polling",
-                    progress=next_progress,
-                    response={
-                        "status": "polling",
-                        "job_id": job_id,
-                        "upstream_uuid": task.upstream_uuid,
-                        "upstream_status": status_text,
-                        "upstream_progress": payload.get("status_percentage") if isinstance(payload, dict) else None,
-                    },
-                    duration=self._task_duration(task),
-                )
+                previous_status = ""
+                if task.response_payload:
+                    try:
+                        previous_payload = json.loads(task.response_payload)
+                        previous_status = self._extract_status(previous_payload)
+                    except Exception:
+                        previous_status = ""
+                if next_progress != task.progress or previous_status != status_text:
+                    await self.db.update_geminigen_task(
+                        job_id,
+                        status="processing",
+                        progress=next_progress,
+                        response_payload=json.dumps(payload, ensure_ascii=False),
+                    )
+                    await self._update_request_log(
+                        task.request_log_id,
+                        status_text="geminigen_polling",
+                        progress=next_progress,
+                        response={
+                            "status": "polling",
+                            "job_id": job_id,
+                            "upstream_uuid": task.upstream_uuid,
+                            "upstream_status": status_text,
+                            "upstream_progress": payload.get("status_percentage") if isinstance(payload, dict) else None,
+                        },
+                        duration=self._task_duration(task),
+                    )
+                else:
+                    return task
             return await self.db.get_geminigen_task(job_id) or task
         except Exception as exc:
             await self.db.update_geminigen_task(job_id, status="failed", error_message=str(exc), completed_at=datetime.utcnow())
@@ -1968,10 +2007,14 @@ class GeminiGenService:
         return await self.db.get_geminigen_task(job_id) or task
 
     async def complete_task_in_background(self, job_id: str, *, api_key_id: Optional[int], base_url: Optional[str]) -> None:
+        if not await self._claim_background_completion(job_id):
+            return
         try:
             await self.wait_for_task(job_id, api_key_id=api_key_id, base_url=base_url)
         except Exception as exc:
             debug_logger.log_warning(f"GeminiGen background poll failed for {job_id}: {exc}")
+        finally:
+            await self._release_background_completion(job_id)
 
     async def resume_active_tasks(self, *, base_url: Optional[str] = None, limit: int = 100) -> int:
         try:
