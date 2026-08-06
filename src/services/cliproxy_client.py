@@ -11,6 +11,8 @@ import asyncio
 import base64
 import json
 import re
+from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import httpx
@@ -20,6 +22,8 @@ from ..core.cliproxy_models import (
     CLIProxyAccount,
     CLIProxyAlias,
     CLIProxyApiKeyImport,
+    CLIProxyCredentialImportItem,
+    CLIProxyCredentialImportResponse,
     CLIProxyLogs,
     CLIProxyModel,
     CLIProxyOAuthSession,
@@ -92,6 +96,16 @@ _KEY_VALUE_RE = re.compile(
     r"(?i)(api[-_ ]?key|access[-_ ]?token|refresh[-_ ]?token|client[-_ ]?secret|password|cookie)(\s*[:=]\s*)([^\s,;]+)"
 )
 _DATA_URL_RE = re.compile(r"data:[^;\s]+;base64,[A-Za-z0-9+/=]+", re.IGNORECASE)
+_UNSAFE_FILENAME_RE = re.compile(r"[^A-Za-z0-9._@+\-]+")
+MAX_CREDENTIAL_FILE_BYTES = 2 * 1024 * 1024
+MAX_CREDENTIAL_BUNDLE_ITEMS = 100
+
+
+@dataclass(frozen=True)
+class _PreparedCredential:
+    name: str
+    email: str
+    content: bytes
 
 
 class CLIProxyUpstreamError(Exception):
@@ -185,6 +199,187 @@ def _validate_platform(value: str) -> str:
     if not _SAFE_PLATFORM.fullmatch(normalized):
         raise HTTPException(status_code=400, detail="Invalid CLIProxy platform")
     return normalized
+
+
+def _string_field(source: Dict[str, Any], *names: str) -> str:
+    for name in names:
+        value = source.get(name)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def _jwt_payload(token: str) -> Dict[str, Any]:
+    parts = str(token or "").split(".")
+    if len(parts) < 2:
+        return {}
+    try:
+        encoded = parts[1] + "=" * (-len(parts[1]) % 4)
+        decoded = base64.urlsafe_b64decode(encoded.encode("ascii"))
+        value = json.loads(decoded.decode("utf-8"))
+    except Exception:
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _timestamp_iso(value: Any) -> str:
+    if isinstance(value, str) and value.strip():
+        raw = value.strip()
+        try:
+            parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except ValueError:
+            return raw
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        seconds = float(value)
+        if seconds > 1_000_000_000_000:
+            seconds /= 1000
+        try:
+            return datetime.fromtimestamp(seconds, timezone.utc).isoformat().replace("+00:00", "Z")
+        except (OSError, OverflowError, ValueError):
+            return ""
+    return ""
+
+
+def _codex_account_id(item: Dict[str, Any], id_token: str) -> str:
+    direct = _string_field(item, "account_id", "accountId", "chatgpt_account_id")
+    if direct:
+        return direct
+    auth_claims = _jwt_payload(id_token).get("https://api.openai.com/auth")
+    if not isinstance(auth_claims, dict):
+        return ""
+    return _string_field(auth_claims, "chatgpt_account_id", "account_id")
+
+
+def _codex_expiry(item: Dict[str, Any], access_token: str, id_token: str) -> str:
+    explicit = _timestamp_iso(item.get("expired") or item.get("expires_at"))
+    if explicit:
+        return explicit
+    for token in (access_token, id_token):
+        exp = _jwt_payload(token).get("exp")
+        normalized = _timestamp_iso(exp)
+        if normalized:
+            return normalized
+    return ""
+
+
+def _normalize_cockpit_codex_credential(item: Dict[str, Any], index: int) -> Dict[str, Any]:
+    declared = _string_field(item, "type", "provider")
+    if declared and canonical_platform(declared) != "codex":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Credential bundle item {index + 1} is {declared}, not codex",
+        )
+    auth_mode = _string_field(item, "auth_mode", "authMode").lower()
+    if auth_mode in {"apikey", "api_key"} or _string_field(item, "OPENAI_API_KEY"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Credential bundle item {index + 1} is an API-key account; use the API key tab",
+        )
+
+    nested = item.get("tokens")
+    tokens = nested if isinstance(nested, dict) else item
+    access_token = _string_field(tokens, "access_token", "accessToken")
+    if not access_token:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Credential bundle item {index + 1} is missing access_token",
+        )
+    id_token = _string_field(tokens, "id_token", "idToken")
+    refresh_token = _string_field(tokens, "refresh_token", "refreshToken")
+    email = _string_field(item, "email") or _string_field(tokens, "email")
+    account_id = _codex_account_id(item, id_token)
+    last_refresh = _timestamp_iso(
+        item.get("last_refresh")
+        or item.get("lastRefresh")
+        or item.get("token_updated_at")
+        or item.get("tokenUpdatedAt")
+    )
+
+    # Only forward fields needed by CLIProxy. Cockpit notes can contain passwords,
+    # MFA seeds, phone numbers, and mailbox URLs that do not belong in the gateway.
+    return {
+        "type": "codex",
+        "email": email,
+        "access_token": access_token,
+        "refresh_token": refresh_token,
+        "id_token": id_token,
+        "account_id": account_id,
+        "last_refresh": last_refresh,
+        "expired": _codex_expiry(item, access_token, id_token),
+    }
+
+
+def _credential_filename(platform: str, item: Dict[str, Any], index: int, used: set[str]) -> str:
+    identity = _string_field(item, "email", "account_id") or f"account-{index + 1}"
+    safe_identity = _UNSAFE_FILENAME_RE.sub("-", identity).strip(".-_") or f"account-{index + 1}"
+    stem = f"{platform}-{safe_identity}"[:235].rstrip(".-_")
+    candidate = f"{stem}.json"
+    suffix = 2
+    while candidate.lower() in used:
+        suffix_text = f"-{suffix}"
+        candidate = f"{stem[:235 - len(suffix_text)]}{suffix_text}.json"
+        suffix += 1
+    used.add(candidate.lower())
+    return _validate_identifier(candidate, "credential filename")
+
+
+def prepare_credential_imports(
+    *, platform: str, filename: str, content: bytes
+) -> List[_PreparedCredential]:
+    canonical = _validate_platform(platform)
+    if len(content) > MAX_CREDENTIAL_FILE_BYTES:
+        raise HTTPException(status_code=413, detail="Credential file exceeds 2 MiB")
+    try:
+        decoded = json.loads(content.decode("utf-8-sig"))
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="Credential file must contain valid UTF-8 JSON") from exc
+
+    is_bundle = isinstance(decoded, list)
+    if is_bundle:
+        if canonical != "codex":
+            raise HTTPException(
+                status_code=400,
+                detail="Multi-account credential bundles are currently supported for Codex exports",
+            )
+        if not decoded:
+            raise HTTPException(status_code=400, detail="Credential bundle is empty")
+        if len(decoded) > MAX_CREDENTIAL_BUNDLE_ITEMS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Credential bundle exceeds {MAX_CREDENTIAL_BUNDLE_ITEMS} accounts",
+            )
+        raw_items = decoded
+    elif isinstance(decoded, dict):
+        raw_items = [decoded]
+    else:
+        raise HTTPException(status_code=400, detail="Credential JSON root must be an object or array")
+
+    used_names: set[str] = set()
+    prepared: List[_PreparedCredential] = []
+    for index, raw in enumerate(raw_items):
+        if not isinstance(raw, dict):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Credential bundle item {index + 1} must be a JSON object",
+            )
+        normalized = _normalize_cockpit_codex_credential(raw, index) if canonical == "codex" else raw
+        if is_bundle:
+            name = _credential_filename(canonical, normalized, index, used_names)
+        else:
+            name = _validate_identifier(filename, "credential filename")
+            if not name.lower().endswith(".json"):
+                raise HTTPException(status_code=400, detail="Credential filename must end in .json")
+        prepared.append(
+            _PreparedCredential(
+                name=name,
+                email=_string_field(normalized, "email"),
+                content=json.dumps(normalized, separators=(",", ":")).encode("utf-8"),
+            )
+        )
+    return prepared
 
 
 def _model_capabilities(raw: Dict[str, Any], model_id: str) -> List[str]:
@@ -348,17 +543,24 @@ class CLIProxyManagementClient:
         self, *, platform: str, filename: str, content: bytes, location: str = "us-central1"
     ) -> Dict[str, Any]:
         canonical = _validate_platform(platform)
-        safe_name = _validate_identifier(filename, "credential filename")
-        if not safe_name.lower().endswith(".json"):
-            raise HTTPException(status_code=400, detail="Credential filename must end in .json")
-        if len(content) > 2 * 1024 * 1024:
-            raise HTTPException(status_code=413, detail="Credential file exceeds 2 MiB")
-        try:
-            decoded = json.loads(content.decode("utf-8"))
-        except Exception as exc:
-            raise HTTPException(status_code=400, detail="Credential file must contain valid UTF-8 JSON") from exc
-        if not isinstance(decoded, dict):
-            raise HTTPException(status_code=400, detail="Credential JSON root must be an object")
+        prepared = prepare_credential_imports(
+            platform=canonical,
+            filename=filename,
+            content=content,
+        )
+        if len(prepared) != 1:
+            raise HTTPException(
+                status_code=400,
+                detail="Use import_credential_file for a multi-account credential bundle",
+            )
+        return await self._upload_prepared_credential(canonical, prepared[0], location)
+
+    async def _upload_prepared_credential(
+        self, platform: str, credential: _PreparedCredential, location: str
+    ) -> Dict[str, Any]:
+        safe_name = credential.name
+        content = credential.content
+        canonical = _validate_platform(platform)
         if canonical == "vertex":
             safe_location = str(location or "us-central1").strip()
             if not re.fullmatch(r"[A-Za-z0-9-]{1,64}", safe_location):
@@ -375,6 +577,47 @@ class CLIProxyManagementClient:
                 "POST", "auth-files", params={"name": safe_name}, content=content, timeout=45.0
             )
         return redact_structure(result)
+
+    async def import_credential_file(
+        self, *, platform: str, filename: str, content: bytes, location: str = "us-central1"
+    ) -> CLIProxyCredentialImportResponse:
+        canonical = _validate_platform(platform)
+        prepared = prepare_credential_imports(
+            platform=canonical,
+            filename=filename,
+            content=content,
+        )
+        semaphore = asyncio.Semaphore(4)
+
+        async def upload(credential: _PreparedCredential) -> CLIProxyCredentialImportItem:
+            try:
+                async with semaphore:
+                    await self._upload_prepared_credential(canonical, credential, location)
+                return CLIProxyCredentialImportItem(
+                    name=credential.name,
+                    email=credential.email,
+                    status="imported",
+                )
+            except CLIProxyUpstreamError as exc:
+                return CLIProxyCredentialImportItem(
+                    name=credential.name,
+                    email=credential.email,
+                    status="failed",
+                    error=redact_text(exc.detail, 400),
+                )
+
+        items = await asyncio.gather(*(upload(credential) for credential in prepared))
+        imported = sum(1 for item in items if item.status == "imported")
+        failed = len(items) - imported
+        return CLIProxyCredentialImportResponse(
+            success=failed == 0,
+            platform=canonical,
+            source_name=str(filename or "credential.json")[:255],
+            total=len(items),
+            imported=imported,
+            failed=failed,
+            items=items,
+        )
 
     async def import_api_key(self, request: CLIProxyApiKeyImport) -> Dict[str, Any]:
         provider = _validate_platform(request.provider)

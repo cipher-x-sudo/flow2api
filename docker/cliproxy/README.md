@@ -26,3 +26,16 @@ only for OAuth callbacks and protected break-glass access to
 Image and video generation are disabled, while image inputs to chat completion
 requests remain available for prompt cloning and metadata analysis.
 
+## Import all Codex accounts from Cockpit Tools
+
+Cockpit Tools v1.3.15 can export the selected Codex accounts as one portable
+JSON array. In Cockpit, select all required accounts, click Export, keep the
+`Cockpit Tools` format, and save the JSON file. Then open Flow2API **Manage →
+AI Gateway → Add account → Credential file**, select **Codex**, choose that one
+file, and click **Import account(s)**. Flow2API converts both portable Cockpit
+records and older nested `tokens` records, strips unrelated sensitive note
+fields, and imports up to 100 accounts in one action.
+
+After confirming the imported accounts are healthy, stop Cockpit's local API
+Service for those accounts. Running both gateways against the same rotating
+OAuth refresh tokens can invalidate a refreshed session in the other gateway.

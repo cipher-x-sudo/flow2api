@@ -12,6 +12,7 @@ from ..core.cliproxy_models import (
     CLIProxyAliasUpdate,
     CLIProxyApiKeyImport,
     CLIProxyConnectivityTest,
+    CLIProxyCredentialImportResponse,
     CLIProxyExclusionUpdate,
     CLIProxyLogs,
     CLIProxyModel,
@@ -68,27 +69,21 @@ async def cliproxy_delete_account(name: str):
     return {"success": True, "result": result}
 
 
-@router.post("/accounts/import")
+@router.post("/accounts/import", response_model=CLIProxyCredentialImportResponse)
 async def cliproxy_import_credential(
     platform: str = Form(...),
     file: UploadFile = File(...),
     location: str = Form("us-central1"),
 ):
     content = await file.read(2 * 1024 * 1024 + 1)
-    result = await _management_call(
-        CLIProxyManagementClient().import_credential(
+    return await _management_call(
+        CLIProxyManagementClient().import_credential_file(
             platform=platform,
             filename=file.filename or "credential.json",
             content=content,
             location=location,
         )
     )
-    return {
-        "success": True,
-        "platform": platform,
-        "name": file.filename or "credential.json",
-        "result": result,
-    }
 
 
 @router.post("/accounts/api-key")

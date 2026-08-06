@@ -11,7 +11,9 @@ from src.core.cliproxy_models import CLIProxyAlias, CLIProxyApiKeyImport
 from src.services.cliproxy_client import (
     CLIProxyInferenceClient,
     CLIProxyManagementClient,
+    CLIProxyUpstreamError,
     namespaced_model,
+    prepare_credential_imports,
     redact_structure,
     redact_text,
     split_gateway_model,
@@ -113,6 +115,83 @@ class CLIProxyInferenceTests(unittest.IsolatedAsyncioTestCase):
 
 
 class CLIProxyManagementTests(unittest.IsolatedAsyncioTestCase):
+    async def test_cockpit_bundle_imports_all_accounts_and_strips_unrelated_secrets(self):
+        client = _StubManagement()
+        bundle = [
+            {
+                "type": "codex",
+                "email": "owner@example.com",
+                "access_token": "access-one",
+                "refresh_token": "refresh-one",
+                "id_token": "id-one",
+                "account_id": "account-one",
+                "account_password": "do-not-forward",
+                "two_factor_secret": "do-not-forward-either",
+            },
+            {
+                "id": "cockpit-account-two",
+                "email": "owner@example.com",
+                "account_id": "account-two",
+                "tokens": {
+                    "access_token": "access-two",
+                    "refresh_token": "refresh-two",
+                    "id_token": "id-two",
+                },
+            },
+        ]
+
+        result = await client.import_credential_file(
+            platform="codex",
+            filename="codex_accounts.json",
+            content=json.dumps(bundle).encode(),
+        )
+
+        self.assertTrue(result.success)
+        self.assertEqual(result.total, 2)
+        self.assertEqual(result.imported, 2)
+        self.assertEqual(result.failed, 0)
+        upload_calls = [call for call in client.calls if call[:2] == ("POST", "auth-files")]
+        self.assertEqual(len(upload_calls), 2)
+        names = [call[2]["params"]["name"] for call in upload_calls]
+        self.assertEqual(
+            names,
+            ["codex-owner@example.com.json", "codex-owner@example.com-2.json"],
+        )
+        payloads = [json.loads(call[2]["content"]) for call in upload_calls]
+        self.assertEqual(payloads[0]["type"], "codex")
+        self.assertEqual(payloads[1]["access_token"], "access-two")
+        rendered = json.dumps(payloads)
+        self.assertNotIn("do-not-forward", rendered)
+        self.assertNotIn("account_password", rendered)
+        self.assertNotIn("two_factor_secret", rendered)
+
+    async def test_cockpit_batch_reports_sanitized_partial_failures(self):
+        class PartiallyFailingClient(_StubManagement):
+            async def _request(self, method, endpoint, **kwargs):
+                self.calls.append((method, endpoint, kwargs))
+                if b"access-two" in kwargs.get("content", b""):
+                    raise CLIProxyUpstreamError(
+                        409,
+                        "refresh_token=upstream-secret was rejected",
+                    )
+                return {}
+
+        bundle = [
+            {"type": "codex", "email": "one@example.com", "access_token": "access-one"},
+            {"type": "codex", "email": "two@example.com", "access_token": "access-two"},
+        ]
+        result = await PartiallyFailingClient().import_credential_file(
+            platform="codex",
+            filename="codex_accounts.json",
+            content=json.dumps(bundle).encode(),
+        )
+
+        self.assertFalse(result.success)
+        self.assertEqual(result.imported, 1)
+        self.assertEqual(result.failed, 1)
+        self.assertNotIn("upstream-secret", result.items[1].error)
+        self.assertIn("[REDACTED]", result.items[1].error)
+
     async def test_accounts_are_normalized_without_paths_or_credentials(self):
         client = _StubManagement(
             {
@@ -276,6 +355,24 @@ class CLIProxyProviderChainTests(unittest.IsolatedAsyncioTestCase):
 
 
 class CLIProxySecurityTests(unittest.TestCase):
+    def test_cockpit_bundle_rejects_api_key_accounts_and_non_object_items(self):
+        with self.assertRaises(HTTPException) as api_key_error:
+            prepare_credential_imports(
+                platform="codex",
+                filename="accounts.json",
+                content=json.dumps([{"auth_mode": "apikey", "OPENAI_API_KEY": "secret"}]).encode(),
+            )
+        self.assertEqual(api_key_error.exception.status_code, 400)
+        self.assertNotIn("secret", api_key_error.exception.detail)
+
+        with self.assertRaises(HTTPException) as shape_error:
+            prepare_credential_imports(
+                platform="codex",
+                filename="accounts.json",
+                content=b'["not-an-account"]',
+            )
+        self.assertEqual(shape_error.exception.status_code, 400)
+
     def test_model_namespaces_and_secret_redaction(self):
         self.assertEqual(namespaced_model("anthropic", "sonnet"), "claude/sonnet")
         self.assertEqual(split_gateway_model("xai/grok-4.5"), ("xai", "grok-4.5"))

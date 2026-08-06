@@ -130,6 +130,21 @@ type OAuthSession = {
   error: string
 }
 
+type CredentialImportResponse = {
+  success: boolean
+  platform: string
+  source_name: string
+  total: number
+  imported: number
+  failed: number
+  items: Array<{
+    name: string
+    email: string
+    status: string
+    error: string
+  }>
+}
+
 const API = "/api/admin/cliproxy"
 const EMPTY_STATUS: GatewayStatus = {
   configured: false,
@@ -187,6 +202,7 @@ export function AIGateway({ active }: { active: boolean }) {
   const [importMode, setImportMode] = useState("oauth")
   const [importPlatform, setImportPlatform] = useState("codex")
   const [credentialFile, setCredentialFile] = useState<File | null>(null)
+  const [credentialImportResult, setCredentialImportResult] = useState<CredentialImportResponse | null>(null)
   const [vertexLocation, setVertexLocation] = useState("us-central1")
   const [apiKey, setApiKey] = useState("")
   const [providerName, setProviderName] = useState("")
@@ -370,14 +386,21 @@ export function AIGateway({ active }: { active: boolean }) {
     form.set("file", credentialFile)
     form.set("location", vertexLocation)
     try {
-      const response = await adminJson<Record<string, unknown>>(`${API}/accounts/import`, token, { method: "POST", body: form })
-      if (!response.ok) {
+      const response = await adminJson<CredentialImportResponse>(`${API}/accounts/import`, token, { method: "POST", body: form })
+      if (!response.ok || !response.data) {
         toast.error(errorMessage(response.data, "Credential import failed"))
         return
       }
-      toast.success("Credential imported")
-      setCredentialFile(null)
-      setImportOpen(false)
+      setCredentialImportResult(response.data)
+      if (response.data.failed === 0) {
+        toast.success(`Imported ${response.data.imported} gateway account${response.data.imported === 1 ? "" : "s"}`)
+        setCredentialFile(null)
+        setImportOpen(false)
+      } else if (response.data.imported > 0) {
+        toast.warning(`Imported ${response.data.imported}; ${response.data.failed} failed`)
+      } else {
+        toast.error(`All ${response.data.failed} account imports failed`)
+      }
       await load(true)
     } finally {
       setActionKey("")
@@ -604,7 +627,7 @@ FLOW2API_CLIPROXY_MANAGEMENT_KEY=<management-key>`}</pre>
                   <SelectContent><SelectItem value="all">All platforms</SelectItem>{Array.from(new Set(accounts.map((account) => account.platform))).map((platform) => <SelectItem key={platform} value={platform}>{platform}</SelectItem>)}</SelectContent>
                 </Select>
               </div>
-              <Button onClick={() => setImportOpen(true)}><Plus className="mr-2 h-4 w-4" /> Add account</Button>
+              <Button onClick={() => { setCredentialImportResult(null); setImportOpen(true) }}><Plus className="mr-2 h-4 w-4" /> Add account</Button>
             </div>
             <Card>
               <CardContent className="p-0">
@@ -682,7 +705,7 @@ FLOW2API_CLIPROXY_MANAGEMENT_KEY=<management-key>`}</pre>
         </Tabs>
       )}
 
-      <Dialog open={importOpen} onOpenChange={(open) => { setImportOpen(open); if (!open) setOauth(null) }}>
+      <Dialog open={importOpen} onOpenChange={(open) => { setImportOpen(open); if (!open) { setOauth(null); setCredentialImportResult(null) } }}>
         <DialogContent className="max-w-xl">
           <DialogHeader><DialogTitle>Add gateway account</DialogTitle><DialogDescription>OAuth tokens and imported credentials are stored only in CLIProxy's Railway volume.</DialogDescription></DialogHeader>
           <Tabs value={importMode} onValueChange={(mode) => {
@@ -700,13 +723,13 @@ FLOW2API_CLIPROXY_MANAGEMENT_KEY=<management-key>`}</pre>
               <TabsContent value="oauth" className="m-0 space-y-4">
                 {oauth ? <div className="rounded-lg border bg-muted/30 p-4"><div className="flex items-center gap-2 font-medium"><Activity className={`h-4 w-4 ${oauth.status === "wait" ? "animate-pulse text-amber-500" : oauth.status === "ok" ? "text-emerald-500" : "text-destructive"}`} /> OAuth {oauth.status}</div>{oauth.user_code ? <div className="mt-3"><p className="text-xs text-muted-foreground">Device code</p><code className="mt-1 block rounded border bg-background p-3 text-center text-lg tracking-widest">{oauth.user_code}</code></div> : null}{oauth.url ? <Button className="mt-3" variant="outline" size="sm" asChild><a href={oauth.url} target="_blank" rel="noreferrer">Open login page <ExternalLink className="ml-2 h-3.5 w-3.5" /></a></Button> : null}{oauth.error ? <p className="mt-2 text-sm text-destructive">{oauth.error}</p> : null}</div> : <div className="rounded-lg border border-dashed p-5 text-center"><KeyRound className="mx-auto h-6 w-6 text-muted-foreground" /><p className="mt-2 text-sm">Start a secure provider login in a new tab.</p></div>}
               </TabsContent>
-              <TabsContent value="credential" className="m-0 space-y-4"><div className="space-y-2"><Label htmlFor="gateway-credential">Credential JSON</Label><Input id="gateway-credential" type="file" accept="application/json,.json" onChange={(event) => setCredentialFile(event.target.files?.[0] || null)} /></div>{importPlatform === "vertex" ? <div className="space-y-2"><Label>Vertex location</Label><Input value={vertexLocation} onChange={(event) => setVertexLocation(event.target.value)} /></div> : null}<p className="text-xs text-muted-foreground">Maximum 2 MiB. Flow2API validates the JSON and forwards it directly to the gateway.</p></TabsContent>
+              <TabsContent value="credential" className="m-0 space-y-4"><div className="space-y-2"><Label htmlFor="gateway-credential">Credential JSON or Cockpit bundle</Label><Input id="gateway-credential" type="file" accept="application/json,.json" onChange={(event) => { setCredentialFile(event.target.files?.[0] || null); setCredentialImportResult(null) }} /></div>{importPlatform === "vertex" ? <div className="space-y-2"><Label>Vertex location</Label><Input value={vertexLocation} onChange={(event) => setVertexLocation(event.target.value)} /></div> : null}<p className="text-xs text-muted-foreground">Maximum 2 MiB. For Codex, choose one Cockpit Tools export containing all accounts; Flow2API imports the whole array in one action.</p>{credentialImportResult ? <div className={`rounded-lg border p-3 text-sm ${credentialImportResult.failed ? "border-amber-500/30 bg-amber-500/5" : "border-emerald-500/30 bg-emerald-500/5"}`}><p className="font-medium">Imported {credentialImportResult.imported} of {credentialImportResult.total} accounts</p>{credentialImportResult.failed ? <div className="mt-2 max-h-32 space-y-1 overflow-y-auto text-xs text-muted-foreground">{credentialImportResult.items.filter((item) => item.status === "failed").map((item) => <p key={item.name}><span className="font-medium text-foreground">{item.email || item.name}:</span> {item.error || "Import failed"}</p>)}</div> : null}</div> : null}</TabsContent>
               <TabsContent value="api-key" className="m-0 space-y-4"><div className="space-y-2"><Label>API key</Label><Input type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} autoComplete="off" /></div>{importPlatform === "openai-compatible" ? <div className="space-y-3"><div className="space-y-2"><Label>Provider name</Label><Input value={providerName} onChange={(event) => setProviderName(event.target.value)} placeholder="openrouter" /></div><div className="space-y-2"><Label>Base URL</Label><Input value={providerBaseUrl} onChange={(event) => setProviderBaseUrl(event.target.value)} placeholder="https://api.example.com/v1" /></div></div> : null}<div className="space-y-2"><Label>Models (comma separated)</Label><Textarea value={providerModels} onChange={(event) => setProviderModels(event.target.value)} placeholder="model-a, model-b" rows={3} /></div></TabsContent>
             </div>
           </Tabs>
           <DialogFooter>
             {importMode === "oauth" ? <>{oauth?.state && oauth.status === "wait" ? <Button variant="outline" onClick={() => void cancelOAuth()}>Cancel session</Button> : null}<Button onClick={() => void startOAuth()} disabled={actionKey === "oauth"}>{actionKey === "oauth" ? "Starting…" : "Start OAuth"}</Button></> : null}
-            {importMode === "credential" ? <Button onClick={() => void importCredential()} disabled={actionKey === "credential"}><Upload className="mr-2 h-4 w-4" /> {actionKey === "credential" ? "Importing…" : "Import credential"}</Button> : null}
+            {importMode === "credential" ? <Button onClick={() => void importCredential()} disabled={actionKey === "credential"}><Upload className="mr-2 h-4 w-4" /> {actionKey === "credential" ? "Importing accounts…" : "Import account(s)"}</Button> : null}
             {importMode === "api-key" ? <Button onClick={() => void importApiKey()} disabled={!apiKey || actionKey === "api-key"}><KeyRound className="mr-2 h-4 w-4" /> {actionKey === "api-key" ? "Importing…" : "Import API key"}</Button> : null}
           </DialogFooter>
         </DialogContent>

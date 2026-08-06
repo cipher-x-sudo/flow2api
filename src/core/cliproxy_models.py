@@ -140,3 +140,20 @@ class CLIProxyImportResult(BaseModel):
     platform: str
     name: str = ""
     detail: Dict[str, Any] = Field(default_factory=dict)
+
+
+class CLIProxyCredentialImportItem(BaseModel):
+    name: str
+    email: str = ""
+    status: str
+    error: str = ""
+
+
+class CLIProxyCredentialImportResponse(BaseModel):
+    success: bool
+    platform: str
+    source_name: str
+    total: int
+    imported: int
+    failed: int
+    items: List[CLIProxyCredentialImportItem] = Field(default_factory=list)
