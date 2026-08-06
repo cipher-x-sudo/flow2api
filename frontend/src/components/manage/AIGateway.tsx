@@ -7,6 +7,8 @@ import {
   KeyRound,
   Network,
   Plus,
+  Power,
+  PowerOff,
   RefreshCw,
   Route,
   ShieldCheck,
@@ -495,6 +497,20 @@ export function AIGateway({ active }: { active: boolean }) {
     if (ok) setExclusions((previous) => ({ ...previous, [platform]: next }))
   }
 
+  const setAllModelsEnabled = async (platform: GatewayPlatform, enabled: boolean) => {
+    const current = exclusions[platform.id] || []
+    const next = enabled
+      ? []
+      : Array.from(new Set([...current, ...platform.models.map((model) => model.raw_id).filter(Boolean)]))
+    const ok = await mutate(
+      `exclude:${platform.id}:all`,
+      `${API}/exclusions/${platform.id}`,
+      { method: "PATCH", body: JSON.stringify({ models: next }) },
+      `${platform.label} models ${enabled ? "enabled" : "disabled"}`,
+    )
+    if (ok) setExclusions((previous) => ({ ...previous, [platform.id]: next }))
+  }
+
   const saveAliases = async (platform: string, next: GatewayAlias[]) => {
     const ok = await mutate(
       `alias:${platform}`,
@@ -656,23 +672,66 @@ FLOW2API_CLIPROXY_MANAGEMENT_KEY=<management-key>`}</pre>
 
           <TabsContent value="models" className="mt-5 space-y-5">
             <div className="grid gap-4 lg:grid-cols-2">
-              {platforms.map((platform) => (
-                <Card key={platform.id}>
-                  <CardHeader className="pb-3"><div className="flex items-center justify-between gap-3"><div><CardTitle className="text-base">{platform.label}</CardTitle><CardDescription>{platform.account_count} accounts · namespace <code>{platform.namespace}/</code></CardDescription></div><Badge variant={platform.error ? "secondary" : "outline"}>{platform.models.length} models</Badge></div></CardHeader>
-                  <CardContent>
-                    {platform.error ? <p className="mb-3 text-xs text-muted-foreground">{platform.error}</p> : null}
-                    <ScrollArea className="h-56 pr-3">
-                      <div className="space-y-2">
-                        {platform.models.map((model) => {
-                          const excluded = (exclusions[platform.id] || []).includes(model.raw_id)
-                          return <div key={model.id} className="flex items-center justify-between gap-3 rounded-lg border px-3 py-2"><div className="min-w-0"><div className="truncate font-mono text-xs" title={model.id}>{model.id}</div><div className="mt-1 flex gap-1">{model.capabilities.map((capability) => <Badge key={capability} variant="secondary" className="px-1.5 py-0 text-[10px]">{capability}</Badge>)}</div></div><div className="flex items-center gap-1"><Button size="sm" variant="ghost" onClick={() => void testModel(model.id)} disabled={actionKey === `test:${model.id}`} title="Connectivity test"><TestTube2 className="h-4 w-4" /></Button><Switch checked={!excluded} onCheckedChange={(enabled) => void setModelExcluded(platform.id, model.raw_id, !enabled)} disabled={actionKey === `exclude:${platform.id}:${model.raw_id}`} aria-label={`Allow ${model.id}`} /></div></div>
-                        })}
-                        {!platform.models.length ? <p className="py-12 text-center text-sm text-muted-foreground">No model definitions discovered.</p> : null}
+              {platforms.map((platform) => {
+                const platformExclusions = exclusions[platform.id] || []
+                const excludedModels = new Set(platformExclusions)
+                const enabledCount = platform.models.filter((model) => !excludedModels.has(model.raw_id)).length
+                const allEnabled = platformExclusions.length === 0
+                const allDisabled = platform.models.length > 0 && enabledCount === 0
+                const modelUpdatePending = actionKey.startsWith(`exclude:${platform.id}:`)
+
+                return (
+                  <Card key={platform.id}>
+                    <CardHeader className="pb-3">
+                      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                        <div>
+                          <CardTitle className="text-base">{platform.label}</CardTitle>
+                          <CardDescription>{platform.account_count} accounts · namespace <code>{platform.namespace}/</code></CardDescription>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2 sm:justify-end">
+                          <Badge variant={platform.error ? "secondary" : "outline"}>
+                            {enabledCount} of {platform.models.length} on
+                          </Badge>
+                          <div className="inline-flex" role="group" aria-label={`${platform.label} bulk model controls`}>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="rounded-r-none"
+                              onClick={() => void setAllModelsEnabled(platform, true)}
+                              disabled={!platform.models.length || allEnabled || modelUpdatePending}
+                            >
+                              <Power className="h-3.5 w-3.5" />
+                              All on
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="-ml-px rounded-l-none"
+                              onClick={() => void setAllModelsEnabled(platform, false)}
+                              disabled={!platform.models.length || allDisabled || modelUpdatePending}
+                            >
+                              <PowerOff className="h-3.5 w-3.5" />
+                              All off
+                            </Button>
+                          </div>
+                        </div>
                       </div>
-                    </ScrollArea>
-                  </CardContent>
-                </Card>
-              ))}
+                    </CardHeader>
+                    <CardContent>
+                      {platform.error ? <p className="mb-3 text-xs text-muted-foreground">{platform.error}</p> : null}
+                      <ScrollArea className="h-56 pr-3">
+                        <div className="space-y-2">
+                          {platform.models.map((model) => {
+                            const excluded = excludedModels.has(model.raw_id)
+                            return <div key={model.id} className="flex items-center justify-between gap-3 rounded-lg border px-3 py-2"><div className="min-w-0"><div className="truncate font-mono text-xs" title={model.id}>{model.id}</div><div className="mt-1 flex gap-1">{model.capabilities.map((capability) => <Badge key={capability} variant="secondary" className="px-1.5 py-0 text-[10px]">{capability}</Badge>)}</div></div><div className="flex items-center gap-1"><Button size="sm" variant="ghost" onClick={() => void testModel(model.id)} disabled={actionKey === `test:${model.id}`} title="Connectivity test"><TestTube2 className="h-4 w-4" /></Button><Switch checked={!excluded} onCheckedChange={(enabled) => void setModelExcluded(platform.id, model.raw_id, !enabled)} disabled={modelUpdatePending} aria-label={`Allow ${model.id}`} /></div></div>
+                          })}
+                          {!platform.models.length ? <p className="py-12 text-center text-sm text-muted-foreground">No model definitions discovered.</p> : null}
+                        </div>
+                      </ScrollArea>
+                    </CardContent>
+                  </Card>
+                )
+              })}
             </div>
             <Card>
               <CardHeader><CardTitle className="text-base">Namespaced aliases</CardTitle><CardDescription>Bind an unambiguous Flow2API model ID to a model exposed by one CLIProxy channel.</CardDescription></CardHeader>
