@@ -474,6 +474,7 @@ async def decrypt_and_extract_postgres_archive(
     encrypted_path: Path,
     working_dir: Path,
 ) -> tuple[dict[str, Any], Path]:
+    working_dir.mkdir(parents=True, exist_ok=True)
     _active_key_id, keys = load_backup_keys()
     plain_archive = working_dir / "decrypted.tar.gz"
     await asyncio.to_thread(decrypt_archive, encrypted_path, plain_archive, keys=keys)
