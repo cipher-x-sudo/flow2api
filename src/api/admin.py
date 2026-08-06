@@ -5,11 +5,13 @@ import inspect
 import json
 import mimetypes
 import hashlib
+import os
 import shutil
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
-from fastapi import APIRouter, Depends, File, HTTPException, Header, Query, Request, Response, UploadFile
+from urllib.parse import urlsplit
+from fastapi import APIRouter, Depends, File, HTTPException, Header, Query, Request, Response, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from starlette.background import BackgroundTask
@@ -47,6 +49,7 @@ from ..services.generation_handler import MODEL_CONFIG
 from ..services.browser_profile_service import BrowserProfileService
 from ..services.browser_metrics_cleanup import get_last_browser_metrics_cleanup_stats
 from ..services.google_drive_backup import GoogleDriveBackupError, GoogleDriveBackupService
+from ..services.redis_runtime import RedisUnavailableError, redis_runtime
 
 try:
     import httpx
@@ -807,6 +810,11 @@ class GoogleDriveBackupConfigRequest(BaseModel):
 
 class GoogleDriveRestoreRequest(BaseModel):
     confirmation: str
+
+
+class MaintenanceRequest(BaseModel):
+    active: bool
+    reason: str = Field(default="operator_requested", max_length=300)
 
 
 class AddTokenRequest(BaseModel):
@@ -3328,7 +3336,21 @@ async def health_check():
     """Public health check endpoint - no auth required"""
     try:
         snapshot = await build_public_health_snapshot(db)
-        snapshot["database_ready"] = True
+        database_status = await db.health_snapshot()
+        snapshot.update(database_status)
+        redis_status = redis_runtime.status_snapshot()
+        snapshot["redis_ready"] = redis_status["redis_ready"]
+        snapshot["event_consumer_ready"] = redis_status["event_consumer_ready"]
+        snapshot["maintenance"] = redis_runtime.maintenance_snapshot()
+        snapshot["degraded"] = bool(
+            not database_status.get("database_ready", False)
+            or redis_runtime.maintenance_active
+            or (
+            redis_runtime.mode != "off"
+            and (not redis_status["redis_ready"] or not redis_status["event_consumer_ready"])
+            )
+        )
+        snapshot["redis"] = redis_status
         return snapshot
     except Exception:
         return JSONResponse(
@@ -3336,10 +3358,132 @@ async def health_check():
             content={
                 "backend_running": True,
                 "database_ready": False,
+                "database_backend": getattr(db, "backend", "unknown"),
+                "database_revision": getattr(db, "database_revision", None),
+                "redis_ready": redis_runtime.ready,
+                "event_consumer_ready": redis_runtime.event_consumer_ready,
+                "degraded": True,
                 "has_active_tokens": False,
                 "error": "database_unavailable",
+                "maintenance": redis_runtime.maintenance_snapshot(),
             },
         )
+
+
+@router.get("/api/admin/maintenance")
+async def get_maintenance_state(token: str = Depends(verify_admin_token)):
+    return {"success": True, "maintenance": redis_runtime.maintenance_snapshot()}
+
+
+@router.post("/api/admin/maintenance")
+async def update_maintenance_state(
+    payload: MaintenanceRequest,
+    token: str = Depends(verify_admin_token),
+):
+    try:
+        state = await redis_runtime.set_maintenance(
+            payload.active,
+            reason=payload.reason,
+            owner="admin",
+        )
+    except RedisUnavailableError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="redis_unavailable",
+            headers={"Retry-After": "5"},
+        ) from exc
+    return {"success": True, "maintenance": state}
+
+
+def _websocket_uses_api_only_host(websocket: WebSocket) -> bool:
+    configured = {
+        value.strip().lower()
+        for value in str(os.environ.get("FLOW2API_API_ONLY_HOST", "") or "").split(",")
+        if value.strip()
+    }
+    if not configured:
+        return False
+    forwarded = str(websocket.headers.get("x-forwarded-host") or "").split(",", 1)[0].strip()
+    host = forwarded or str(websocket.headers.get("host") or "").strip()
+    hostname = urlsplit(f"//{host}").hostname or host.split(":", 1)[0]
+    return hostname.lower() in configured
+
+
+def _websocket_origin_is_same_origin(websocket: WebSocket) -> bool:
+    origin = str(websocket.headers.get("origin") or "").strip()
+    if not origin or origin.lower() == "null":
+        return False
+    parsed_origin = urlsplit(origin)
+    if parsed_origin.scheme not in {"http", "https"} or not parsed_origin.hostname:
+        return False
+
+    forwarded_host = str(websocket.headers.get("x-forwarded-host") or "").split(",", 1)[0].strip()
+    expected_host = forwarded_host or str(websocket.headers.get("host") or "").strip()
+    forwarded_proto = str(websocket.headers.get("x-forwarded-proto") or "").split(",", 1)[0].strip().lower()
+    expected_scheme = forwarded_proto or ("https" if websocket.url.scheme == "wss" else "http")
+    parsed_expected = urlsplit(f"{expected_scheme}://{expected_host}")
+
+    def normalized_origin(parsed):
+        default_port = 443 if parsed.scheme == "https" else 80
+        return parsed.scheme, (parsed.hostname or "").lower(), parsed.port or default_port
+
+    return normalized_origin(parsed_origin) == normalized_origin(parsed_expected)
+
+
+@router.websocket("/api/admin/events/ws")
+async def admin_events_websocket(websocket: WebSocket):
+    """Authenticated dashboard event feed with Redis cursor replay."""
+    if _websocket_uses_api_only_host(websocket):
+        await websocket.close(code=1008, reason="admin_websocket_not_available_on_api_host")
+        return
+    if not _websocket_origin_is_same_origin(websocket):
+        await websocket.close(code=1008, reason="same_origin_required")
+        return
+    session_token = str(websocket.cookies.get(ADMIN_SESSION_COOKIE_NAME) or "").strip()
+    if not await is_admin_session_token_valid(session_token):
+        await websocket.close(code=1008, reason="admin_session_required")
+        return
+
+    await websocket.accept()
+    if not redis_runtime.ready:
+        await websocket.close(code=1013, reason="redis_unavailable")
+        return
+
+    cursor = str(websocket.query_params.get("cursor") or "$").strip() or "$"
+    redis_runtime.websocket_clients += 1
+    try:
+        if await redis_runtime.cursor_was_trimmed(cursor):
+            await websocket.send_json(
+                {
+                    "type": "resync",
+                    "data": {"reason": "cursor_trimmed"},
+                    "cursor": cursor,
+                }
+            )
+            cursor = "$"
+        await websocket.send_json(
+            {
+                "type": "redis_state",
+                "data": redis_runtime.status_snapshot(),
+                "cursor": cursor,
+            }
+        )
+        while True:
+            try:
+                events = await redis_runtime.read_events(cursor, block_ms=15_000, count=100)
+            except RedisUnavailableError:
+                await websocket.close(code=1013, reason="redis_unavailable")
+                return
+            if not events:
+                await websocket.send_json({"type": "ping", "cursor": cursor})
+                continue
+            for event in events:
+                cursor = event.cursor
+                await websocket.send_json(event.as_dict())
+    except WebSocketDisconnect:
+        return
+    finally:
+        redis_runtime.websocket_clients = max(0, redis_runtime.websocket_clients - 1)
 
 
 @router.get("/api/stats")
@@ -3406,6 +3550,8 @@ async def get_logs(
             "progress": log.get("progress") or 0,
             "created_at": log.get("created_at"),
             "updated_at": log.get("updated_at"),
+            "payload_available": bool(log.get("payload_available")),
+            "payload_storage_error": log.get("payload_storage_error"),
             "error_summary": _extract_error_summary(log.get("response_body_excerpt")) if status_code is not None and status_code >= 400 else "",
             "captcha_user_agent_set": captcha_ua["captcha_user_agent_set"],
             "captcha_provider": captcha_ua["captcha_provider"],
@@ -3423,12 +3569,24 @@ async def get_log_detail(
     if not log:
         raise HTTPException(status_code=404, detail="日志不存在")
 
-    error_summary = _extract_error_summary(log.get("response_body"))
-    captcha_ua = _extract_captcha_user_agent_metadata(log.get("response_body"))
+    request_body = log.get("request_body")
+    response_body = log.get("response_body")
+    payload_available = bool(log.get("payload_available"))
+    if payload_available and log.get("payload_object_key") and db.log_payload_manager is not None:
+        try:
+            stored_payload = await db.log_payload_manager.load(str(log["payload_object_key"]))
+            if stored_payload:
+                request_body = stored_payload.get("request_body", request_body)
+                response_body = stored_payload.get("response_body", response_body)
+        except Exception as exc:
+            log["payload_storage_error"] = f"payload_read_failed:{type(exc).__name__}"
+
+    error_summary = _extract_error_summary(response_body)
+    captcha_ua = _extract_captcha_user_agent_metadata(response_body)
 
     return {
         "id": log.get("id"),
-        "job_id": log.get("job_id") or _extract_log_job_id(log.get("response_body"), log.get("request_body")),
+        "job_id": log.get("job_id") or _extract_log_job_id(response_body, request_body),
         "token_id": log.get("token_id"),
         "token_email": log.get("token_email"),
         "token_username": log.get("token_username"),
@@ -3442,11 +3600,15 @@ async def get_log_detail(
         "progress": log.get("progress") or 0,
         "created_at": log.get("created_at"),
         "updated_at": log.get("updated_at"),
+        "payload_available": payload_available,
+        "payload_storage_error": log.get("payload_storage_error"),
+        "request_size_bytes": log.get("request_size_bytes") or 0,
+        "response_size_bytes": log.get("response_size_bytes") or 0,
         "error_summary": error_summary,
         "captcha_user_agent_set": captcha_ua["captcha_user_agent_set"],
         "captcha_provider": captcha_ua["captcha_provider"],
-        "request_body": log.get("request_body"),
-        "response_body": log.get("response_body"),
+        "request_body": request_body,
+        "response_body": response_body,
     }
 
 
@@ -3540,6 +3702,8 @@ async def restore_sqlite_database(
     """Restore flow.db from an uploaded SQLite file."""
     if db is None:
         raise HTTPException(status_code=500, detail="Database service is not initialized")
+    if getattr(db, "backend", "sqlite") != "sqlite":
+        raise HTTPException(status_code=410, detail="sqlite_restore_removed")
 
     db_path = Path(db.db_path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -3563,13 +3727,15 @@ async def restore_sqlite_database(
 
             validation = _validate_uploaded_sqlite_database(upload_path)
 
+            await db.close_runtime_connections()
             if db_path.exists():
-                shutil.copy2(db_path, backup_path)
+                await asyncio.to_thread(_create_sqlite_database_snapshot, db_path, backup_path)
 
             upload_path.replace(db_path)
 
             await db.init_db()
             await db.check_and_migrate_db(config.get_raw_config())
+            await db.cache_schema_capabilities()
             await db.reload_config_to_memory()
 
         return {
@@ -3594,6 +3760,8 @@ async def download_sqlite_database(token: str = Depends(verify_admin_token)):
     """Download a consistent snapshot of the current flow.db SQLite database."""
     if db is None:
         raise HTTPException(status_code=500, detail="Database service is not initialized")
+    if getattr(db, "backend", "sqlite") != "sqlite":
+        raise HTTPException(status_code=410, detail="sqlite_download_removed")
 
     db_path = Path(db.db_path)
     if not db_path.is_file():
@@ -3764,6 +3932,10 @@ async def list_managed_api_keys(token: str = Depends(verify_admin_token)):
     if not api_key_manager:
         raise HTTPException(status_code=503, detail="API key manager not initialized")
     keys = await db.list_api_keys()
+    runtime = getattr(api_key_manager, "redis_runtime", None)
+    if runtime is not None and runtime.ready:
+        for row in keys:
+            row["is_online"] = await runtime.is_present(int(row["id"]))
     return {"success": True, "keys": keys}
 
 
@@ -3837,6 +4009,8 @@ async def update_managed_api_key(
         account_ids=valid_account_ids,
         endpoint_limits=request.endpoint_limits,
     )
+    if api_key_manager:
+        await api_key_manager.invalidate(key_id)
     return {"success": True, "message": "Managed API key updated"}
 
 
@@ -4122,6 +4296,8 @@ async def delete_managed_api_key(
     result = await db.delete_api_key(key_id)
     if not result.get("deleted"):
         raise HTTPException(status_code=404, detail="Managed API key not found")
+    if api_key_manager:
+        await api_key_manager.invalidate(key_id)
 
     worker_sessions_terminated = 0
     try:

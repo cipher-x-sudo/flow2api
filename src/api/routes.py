@@ -62,6 +62,7 @@ from ..services.generation_handler import MODEL_CONFIG, GenerationHandler
 from ..services.geminigen_service import GeminiGenService
 from ..services.llm_provider_chain import LlmProviderChain
 from ..services.runway_service import RunwayService
+from ..services.redis_runtime import RedisUnavailableError
 from ..services.tas_tracker_service import TaskTrackerService
 
 router = APIRouter()
@@ -191,7 +192,26 @@ async def report_client_presence(
     """Record a lightweight heartbeat for a managed desktop client."""
     if auth_core.api_key_manager is None or auth_ctx.key_id is None:
         raise HTTPException(status_code=503, detail="API key manager not initialized")
-    await auth_core.api_key_manager.db.touch_api_key_presence(auth_ctx.key_id)
+    runtime = getattr(auth_core.api_key_manager, "redis_runtime", None)
+    if runtime is not None and runtime.ready:
+        try:
+            await runtime.touch_presence(auth_ctx.key_id)
+        except RedisUnavailableError as exc:
+            raise HTTPException(
+                status_code=503,
+                detail="redis_unavailable",
+                headers={"Retry-After": "5"},
+            ) from exc
+        if not runtime.required:
+            await auth_core.api_key_manager.db.touch_api_key_presence(auth_ctx.key_id)
+    elif runtime is not None and runtime.required:
+        raise HTTPException(
+            status_code=503,
+            detail="redis_unavailable",
+            headers={"Retry-After": "5"},
+        )
+    else:
+        await auth_core.api_key_manager.db.touch_api_key_presence(auth_ctx.key_id)
     return Response(status_code=204)
 
 

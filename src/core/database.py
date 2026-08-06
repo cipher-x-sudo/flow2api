@@ -2,6 +2,9 @@
 import asyncio
 import aiosqlite
 import json
+import os
+import time
+from collections import deque
 from contextlib import asynccontextmanager
 from datetime import date, datetime
 from typing import Optional, List, Dict, Any, Tuple, Set
@@ -159,6 +162,8 @@ def _runway_json_list(raw: Any) -> List[str]:
 class Database:
     """SQLite database manager"""
 
+    backend = "sqlite"
+
     def __init__(self, db_path: str = None):
         if db_path is None:
             data_dir = get_runtime_data_dir()
@@ -168,6 +173,19 @@ class Database:
         self._write_lock = asyncio.Lock()
         self._connect_timeout = 30
         self._busy_timeout_ms = 30000
+        self._writer_connection = None
+        self._persistent_connections_enabled = False
+        self._read_pool: Optional[asyncio.Queue] = None
+        self._read_pool_size = max(1, min(int(os.environ.get("FLOW2API_SQLITE_READ_POOL_SIZE", "3") or 3), 8))
+        self._connection_init_lock = asyncio.Lock()
+        self._writer_wait_samples = deque(maxlen=2048)
+        self._writer_wait_total = 0.0
+        self._writer_wait_count = 0
+        self._schema_capabilities: Dict[str, Set[str]] = {}
+        self.event_runtime = None
+        self.log_payload_manager = None
+        self._last_progress_persist: Dict[str, float] = {}
+        self._last_log_progress_persist: Dict[int, float] = {}
 
     def db_exists(self) -> bool:
         """Check if database file exists"""
@@ -183,6 +201,7 @@ class Database:
         try:
             await db.execute("PRAGMA journal_mode = WAL")
             await db.execute("PRAGMA synchronous = NORMAL")
+            await db.execute("PRAGMA auto_vacuum = INCREMENTAL")
         except Exception as exc:
             if not is_sqlite_recoverable_storage_error(exc):
                 raise
@@ -199,17 +218,156 @@ class Database:
 
     @asynccontextmanager
     async def _connect(self, *, write: bool = False):
-        """Open a configured SQLite connection and optionally serialize writes."""
+        """Borrow a configured persistent SQLite connection."""
+        if not self._persistent_connections_enabled:
+            if write:
+                wait_started = time.perf_counter()
+                async with self._write_lock:
+                    waited = time.perf_counter() - wait_started
+                    self._writer_wait_samples.append(waited)
+                    self._writer_wait_total += waited
+                    self._writer_wait_count += 1
+                    async with aiosqlite.connect(self.db_path, timeout=self._connect_timeout) as db:
+                        await self._configure_connection(db)
+                        yield db
+                return
+            async with aiosqlite.connect(self.db_path, timeout=self._connect_timeout) as db:
+                await self._configure_connection(db)
+                yield db
+            return
         if write:
-            async with self._write_lock:
-                async with aiosqlite.connect(self.db_path, timeout=self._connect_timeout) as db:
-                    await self._configure_connection(db)
-                    yield db
+            wait_started = time.perf_counter()
+            await self._write_lock.acquire()
+            waited = time.perf_counter() - wait_started
+            self._writer_wait_samples.append(waited)
+            self._writer_wait_total += waited
+            self._writer_wait_count += 1
+            db = None
+            try:
+                db = await self._get_writer_connection()
+                yield db
+            except Exception:
+                if db is not None:
+                    try:
+                        await db.rollback()
+                    except Exception:
+                        await self._discard_writer_connection()
+                raise
+            finally:
+                if db is not None and getattr(db, "in_transaction", False):
+                    try:
+                        await db.rollback()
+                    except Exception:
+                        await self._discard_writer_connection()
+                self._write_lock.release()
             return
 
-        async with aiosqlite.connect(self.db_path, timeout=self._connect_timeout) as db:
-            await self._configure_connection(db)
+        db = await self._borrow_read_connection()
+        try:
             yield db
+        finally:
+            if getattr(db, "in_transaction", False):
+                try:
+                    await db.rollback()
+                except Exception:
+                    pass
+            if self._read_pool is not None:
+                await self._read_pool.put(db)
+
+    async def _get_writer_connection(self):
+        if self._writer_connection is not None:
+            return self._writer_connection
+        async with self._connection_init_lock:
+            if self._writer_connection is None:
+                self._writer_connection = await aiosqlite.connect(
+                    self.db_path,
+                    timeout=self._connect_timeout,
+                )
+                await self._configure_connection(self._writer_connection)
+            return self._writer_connection
+
+    async def _borrow_read_connection(self):
+        if self._read_pool is None:
+            async with self._connection_init_lock:
+                if self._read_pool is None:
+                    pool: asyncio.Queue = asyncio.Queue(maxsize=self._read_pool_size)
+                    for _ in range(self._read_pool_size):
+                        connection = await aiosqlite.connect(
+                            self.db_path,
+                            timeout=self._connect_timeout,
+                        )
+                        await self._configure_connection(connection)
+                        await pool.put(connection)
+                    self._read_pool = pool
+        return await self._read_pool.get()
+
+    async def _discard_writer_connection(self) -> None:
+        connection, self._writer_connection = self._writer_connection, None
+        if connection is not None:
+            try:
+                await connection.close()
+            except Exception:
+                pass
+
+    async def close_runtime_connections(self) -> None:
+        """Close persistent connections before shutdown or an atomic database swap."""
+        self._schema_capabilities = {}
+        async with self._write_lock:
+            await self._discard_writer_connection()
+            pool, self._read_pool = self._read_pool, None
+            if pool is not None:
+                while not pool.empty():
+                    connection = await pool.get()
+                    try:
+                        await connection.close()
+                    except Exception:
+                        pass
+
+    def enable_persistent_connections(self) -> None:
+        self._persistent_connections_enabled = True
+
+    def runtime_metrics(self) -> Dict[str, float]:
+        samples = sorted(self._writer_wait_samples)
+        p95_index = max(0, min(len(samples) - 1, int(len(samples) * 0.95))) if samples else 0
+        return {
+            "writer_wait_seconds_total": float(self._writer_wait_total),
+            "writer_wait_count": float(self._writer_wait_count),
+            "writer_wait_seconds_p95": float(samples[p95_index]) if samples else 0.0,
+            "writer_wait_seconds_max": float(samples[-1]) if samples else 0.0,
+        }
+
+    async def health_snapshot(self) -> Dict[str, Any]:
+        """Return backend-specific health and revision details."""
+        started = time.perf_counter()
+        async with self._connect() as db:
+            cursor = await db.execute("PRAGMA user_version")
+            row = await cursor.fetchone()
+        return {
+            "database_backend": "sqlite",
+            "database_ready": True,
+            "database_revision": str(row[0] if row else 0),
+            "cutover_marker_present": False,
+            "restore_marker": None,
+            "latency_ms": round((time.perf_counter() - started) * 1000.0, 3),
+            "database_size_bytes": Path(self.db_path).stat().st_size if Path(self.db_path).exists() else 0,
+            "pool": self.runtime_metrics(),
+        }
+
+    def set_event_runtime(self, runtime: Any) -> None:
+        self.event_runtime = runtime
+
+    def set_log_payload_manager(self, manager: Any) -> None:
+        self.log_payload_manager = manager
+
+    async def cache_schema_capabilities(self) -> None:
+        capabilities: Dict[str, Set[str]] = {}
+        async with self._connect() as db:
+            cursor = await db.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+            for row in await cursor.fetchall():
+                table_name = str(row[0])
+                info_cursor = await db.execute(f"PRAGMA table_info({table_name})")
+                capabilities[table_name] = {str(col[1]) for col in await info_cursor.fetchall()}
+        self._schema_capabilities = capabilities
 
     async def _table_exists(self, db, table_name: str) -> bool:
         """Check if a table exists in the database"""
@@ -222,6 +380,9 @@ class Database:
 
     async def _column_exists(self, db, table_name: str, column_name: str) -> bool:
         """Check if a column exists in a table"""
+        cached = self._schema_capabilities.get(table_name)
+        if cached is not None:
+            return column_name in cached
         try:
             cursor = await db.execute(f"PRAGMA table_info({table_name})")
             columns = await cursor.fetchall()
@@ -1619,10 +1780,25 @@ class Database:
                     duration FLOAT NOT NULL,
                     status_text TEXT DEFAULT '',
                     progress INTEGER DEFAULT 0,
+                    request_excerpt TEXT DEFAULT '',
+                    response_excerpt TEXT DEFAULT '',
+                    payload_available BOOLEAN DEFAULT 0,
+                    payload_object_key TEXT,
+                    payload_storage_error TEXT,
+                    request_size_bytes INTEGER DEFAULT 0,
+                    response_size_bytes INTEGER DEFAULT 0,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (token_id) REFERENCES tokens(id),
                     FOREIGN KEY (api_key_id) REFERENCES api_keys(id)
+                )
+            """)
+
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS redis_persisted_events (
+                    cursor TEXT PRIMARY KEY,
+                    event_type TEXT NOT NULL,
+                    persisted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
 
@@ -1953,6 +2129,10 @@ class Database:
             await db.execute("CREATE INDEX IF NOT EXISTS idx_request_logs_created_at ON request_logs(created_at DESC)")
             await db.execute("CREATE INDEX IF NOT EXISTS idx_request_logs_token_id_created_at ON request_logs(token_id, created_at DESC)")
             await db.execute("CREATE INDEX IF NOT EXISTS idx_request_logs_api_key_id_created_at ON request_logs(api_key_id, created_at DESC)")
+            await db.execute("CREATE INDEX IF NOT EXISTS idx_request_logs_operation_created_at ON request_logs(operation, created_at DESC)")
+            await db.execute("CREATE INDEX IF NOT EXISTS idx_request_logs_status_created_at ON request_logs(status_code, status_text, created_at DESC)")
+            await db.execute("CREATE INDEX IF NOT EXISTS idx_geminigen_tasks_retention ON geminigen_tasks(status, completed_at, updated_at)")
+            await db.execute("CREATE INDEX IF NOT EXISTS idx_api_key_audit_logs_created_at ON api_key_audit_logs(created_at)")
             await db.execute(
                 "CREATE INDEX IF NOT EXISTS idx_request_logs_api_key_op_created ON request_logs(api_key_id, operation, created_at DESC)"
             )
@@ -2160,6 +2340,27 @@ class Database:
                 await db.execute("ALTER TABLE request_logs ADD COLUMN updated_at TIMESTAMP")
             if not await self._column_exists(db, "request_logs", "api_key_id"):
                 await db.execute("ALTER TABLE request_logs ADD COLUMN api_key_id INTEGER")
+            summary_columns = {
+                "request_excerpt": "TEXT DEFAULT ''",
+                "response_excerpt": "TEXT DEFAULT ''",
+                "payload_available": "BOOLEAN DEFAULT 0",
+                "payload_object_key": "TEXT",
+                "payload_storage_error": "TEXT",
+                "request_size_bytes": "INTEGER DEFAULT 0",
+                "response_size_bytes": "INTEGER DEFAULT 0",
+            }
+            for column_name, column_type in summary_columns.items():
+                if not await self._column_exists(db, "request_logs", column_name):
+                    await db.execute(f"ALTER TABLE request_logs ADD COLUMN {column_name} {column_type}")
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS redis_persisted_events (
+                    cursor TEXT PRIMARY KEY,
+                    event_type TEXT NOT NULL,
+                    persisted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
             await db.execute("UPDATE request_logs SET updated_at = created_at WHERE updated_at IS NULL")
         except Exception as e:
             print(f"?? request_logs?????: {e}")
@@ -2715,6 +2916,22 @@ class Database:
 
     async def update_task(self, task_id: str, **kwargs):
         """Update task"""
+        runtime = self.event_runtime
+        status = str(kwargs.get("status") or "").strip().lower()
+        terminal = status in {"completed", "failed", "cancelled", "canceled"} or kwargs.get("completed_at") is not None
+        if runtime is not None and runtime.ready:
+            await runtime.publish_task_progress("native", task_id, kwargs, terminal=terminal)
+            progress_only = set(kwargs).issubset(
+                {"status", "progress", "job_phase", "captcha_status", "captcha_detail"}
+            )
+            now = time.monotonic()
+            progress_key = f"native:{task_id}"
+            last_persisted = self._last_progress_persist.get(progress_key, 0.0)
+            if progress_only and not terminal and now - last_persisted < 2.0:
+                return
+            self._last_progress_persist[progress_key] = now
+            if terminal:
+                self._last_progress_persist.pop(progress_key, None)
         async with self._connect(write=True) as db:
             updates = []
             params = []
@@ -3171,6 +3388,20 @@ class Database:
             return self._coerce_runway_task_row(dict(row))
 
     async def update_runway_task(self, job_id: str, **kwargs) -> None:
+        runtime = self.event_runtime
+        status = str(kwargs.get("status") or "").strip().lower()
+        terminal = status in {"completed", "failed", "cancelled", "canceled"} or kwargs.get("completed_at") is not None
+        if runtime is not None and runtime.ready:
+            await runtime.publish_task_progress("runway", job_id, kwargs, terminal=terminal)
+            progress_only = set(kwargs).issubset({"status", "progress"})
+            now = time.monotonic()
+            progress_key = f"runway:{job_id}"
+            last_persisted = self._last_progress_persist.get(progress_key, 0.0)
+            if progress_only and not terminal and now - last_persisted < 2.0:
+                return
+            self._last_progress_persist[progress_key] = now
+            if terminal:
+                self._last_progress_persist.pop(progress_key, None)
         allowed = {
             "upstream_task_id",
             "account_id",
@@ -3884,6 +4115,89 @@ class Database:
             await db.commit()
             return int(cursor.lastrowid)
 
+    async def create_geminigen_task_with_request_log(
+        self,
+        task: GeminiGenTask,
+        log: RequestLog,
+    ) -> int:
+        """Create the initial GeminiGen task and request summary atomically."""
+        raw_request_body = log.request_body
+        raw_response_body = log.response_body
+        summary = (
+            self.log_payload_manager.summary_fields(raw_request_body, raw_response_body)
+            if self.log_payload_manager is not None
+            else {
+                "request_body": raw_request_body,
+                "response_body": raw_response_body,
+                "request_excerpt": str(raw_request_body or "")[:1024],
+                "response_excerpt": str(raw_response_body or "")[:1024],
+                "request_size_bytes": len(str(raw_request_body or "").encode("utf-8", errors="replace")),
+                "response_size_bytes": len(str(raw_response_body or "").encode("utf-8", errors="replace")),
+            }
+        )
+        async with self._connect(write=True) as db:
+            log_cursor = await db.execute(
+                """
+                INSERT INTO request_logs (
+                    token_id, api_key_id, operation, request_body, response_body,
+                    status_code, duration, status_text, progress,
+                    request_excerpt, response_excerpt, request_size_bytes, response_size_bytes
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    log.token_id, log.api_key_id, log.operation,
+                    summary["request_body"], summary["response_body"],
+                    log.status_code, log.duration, log.status_text or "", log.progress,
+                    summary["request_excerpt"], summary["response_excerpt"],
+                    summary["request_size_bytes"], summary["response_size_bytes"],
+                ),
+            )
+            request_log_id = int(log_cursor.lastrowid)
+            task.request_log_id = request_log_id
+            await db.execute(
+                """
+                INSERT INTO geminigen_tasks (
+                    job_id, upstream_uuid, account_id, api_key_id, request_log_id, public_model_id, kind,
+                    endpoint_type, prompt, status, progress, raw_artifact_urls,
+                    cached_artifact_urls, request_payload, response_payload, error_message,
+                    error_code, retry_at, started_at, completed_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    task.job_id, task.upstream_uuid, task.account_id, task.api_key_id,
+                    request_log_id, task.public_model_id, task.kind, task.endpoint_type,
+                    task.prompt, task.status, task.progress,
+                    json.dumps(task.raw_artifact_urls) if isinstance(task.raw_artifact_urls, list) else task.raw_artifact_urls,
+                    json.dumps(task.cached_artifact_urls) if isinstance(task.cached_artifact_urls, list) else task.cached_artifact_urls,
+                    task.request_payload, task.response_payload, task.error_message,
+                    task.error_code, task.retry_at, task.started_at, task.completed_at,
+                ),
+            )
+            await db.commit()
+        if self.log_payload_manager is not None:
+            self.log_payload_manager.capture_initial(
+                request_log_id,
+                request_body=raw_request_body,
+                response_body=raw_response_body,
+                status_code=log.status_code,
+                status_text=log.status_text or "",
+            )
+        if self.event_runtime is not None and self.event_runtime.ready:
+            await self.event_runtime.publish(
+                "request_summary_created",
+                {
+                    "id": request_log_id,
+                    "api_key_id": log.api_key_id,
+                    "operation": log.operation,
+                    "status_code": log.status_code,
+                    "status_text": log.status_text or "",
+                    "progress": log.progress,
+                    "job_id": task.job_id,
+                },
+                persist=False,
+            )
+        return request_log_id
+
     async def get_geminigen_task(self, job_id: str) -> Optional[GeminiGenTask]:
         async with self._connect() as db:
             db.row_factory = aiosqlite.Row
@@ -3908,6 +4222,20 @@ class Database:
             return [self._coerce_geminigen_task_row(dict(row)) for row in rows]
 
     async def update_geminigen_task(self, job_id: str, **kwargs) -> None:
+        runtime = self.event_runtime
+        status = str(kwargs.get("status") or "").strip().lower()
+        terminal = status in {"completed", "failed", "cancelled", "canceled"} or kwargs.get("completed_at") is not None
+        if runtime is not None and runtime.ready:
+            await runtime.publish_task_progress("geminigen", job_id, kwargs, terminal=terminal)
+            progress_only = set(kwargs).issubset({"status", "progress"})
+            now = time.monotonic()
+            progress_key = f"geminigen:{job_id}"
+            last_persisted = self._last_progress_persist.get(progress_key, 0.0)
+            if progress_only and not terminal and now - last_persisted < 2.0:
+                return
+            self._last_progress_persist[progress_key] = now
+            if terminal:
+                self._last_progress_persist.pop(progress_key, None)
         allowed = {
             "upstream_uuid", "account_id", "api_key_id", "request_log_id", "public_model_id", "kind",
             "endpoint_type", "prompt", "status", "progress", "raw_artifact_urls",
@@ -4822,23 +5150,76 @@ class Database:
     # Request log operations
     async def add_request_log(self, log: RequestLog) -> int:
         """Add request log and return log id"""
+        raw_request_body = log.request_body
+        raw_response_body = log.response_body
+        summary_fields = (
+            self.log_payload_manager.summary_fields(raw_request_body, raw_response_body)
+            if self.log_payload_manager is not None
+            else {
+                "request_body": raw_request_body,
+                "response_body": raw_response_body,
+                "request_excerpt": str(raw_request_body or "")[:1024],
+                "response_excerpt": str(raw_response_body or "")[:1024],
+                "request_size_bytes": len(str(raw_request_body or "").encode("utf-8", errors="replace")),
+                "response_size_bytes": len(str(raw_response_body or "").encode("utf-8", errors="replace")),
+            }
+        )
         async with self._connect(write=True) as db:
             cursor = await db.execute("""
-                INSERT INTO request_logs (token_id, api_key_id, operation, request_body, response_body, status_code, duration, status_text, progress)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO request_logs (
+                    token_id, api_key_id, operation, request_body, response_body,
+                    status_code, duration, status_text, progress,
+                    request_excerpt, response_excerpt, request_size_bytes, response_size_bytes
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 log.token_id,
                 log.api_key_id,
                 log.operation,
-                log.request_body,
-                log.response_body,
+                summary_fields["request_body"],
+                summary_fields["response_body"],
                 log.status_code,
                 log.duration,
                 log.status_text or "",
                 log.progress,
+                summary_fields["request_excerpt"],
+                summary_fields["response_excerpt"],
+                summary_fields["request_size_bytes"],
+                summary_fields["response_size_bytes"],
             ))
             await db.commit()
-            return cursor.lastrowid
+            log_id = int(cursor.lastrowid)
+        if self.log_payload_manager is not None:
+            captured = self.log_payload_manager.capture_initial(
+                log_id,
+                request_body=raw_request_body,
+                response_body=raw_response_body,
+                status_code=log.status_code,
+                status_text=log.status_text or "",
+            )
+            if captured.get("payload_storage_error"):
+                await self.set_request_log_payload_metadata(
+                    log_id,
+                    payload_available=False,
+                    payload_object_key=None,
+                    payload_storage_error=str(captured["payload_storage_error"]),
+                )
+        if self.event_runtime is not None and self.event_runtime.ready:
+            await self.event_runtime.publish(
+                "request_summary_created",
+                {
+                    "id": log_id,
+                    "token_id": log.token_id,
+                    "api_key_id": log.api_key_id,
+                    "operation": log.operation,
+                    "status_code": log.status_code,
+                    "duration": log.duration,
+                    "status_text": log.status_text or "",
+                    "progress": log.progress,
+                },
+                persist=False,
+            )
+        return log_id
 
     async def insert_managed_route_request_log(
         self,
@@ -4918,10 +5299,41 @@ class Database:
             "duration",
             "status_text",
             "progress",
+            "request_excerpt",
+            "response_excerpt",
+            "payload_available",
+            "payload_object_key",
+            "payload_storage_error",
+            "request_size_bytes",
+            "response_size_bytes",
         }
         update_fields = {key: value for key, value in kwargs.items() if key in allowed_fields}
         if not update_fields:
             return
+        if self.log_payload_manager is not None:
+            update_fields = self.log_payload_manager.capture_update(int(log_id), update_fields)
+
+        status_text = str(update_fields.get("status_text") or "").strip().lower()
+        status_code = int(update_fields.get("status_code") or 0)
+        terminal = status_code >= 200 or status_text in {
+            "completed", "failed", "cancelled", "canceled", "error", "timeout"
+        }
+        runtime = self.event_runtime
+        if runtime is not None and runtime.ready:
+            await runtime.publish_task_progress(
+                "request_log",
+                str(log_id),
+                {key: value for key, value in update_fields.items() if key not in {"request_body", "response_body"}},
+                terminal=terminal,
+            )
+            now = time.monotonic()
+            progress_only = set(update_fields).issubset({"status_code", "duration", "status_text", "progress"})
+            last_persisted = self._last_log_progress_persist.get(int(log_id), 0.0)
+            if progress_only and not terminal and now - last_persisted < 2.0:
+                return
+            self._last_log_progress_persist[int(log_id)] = now
+            if terminal:
+                self._last_log_progress_persist.pop(int(log_id), None)
 
         clauses = []
         values = []
@@ -4937,6 +5349,19 @@ class Database:
                 values,
             )
             await db.commit()
+        if runtime is not None and runtime.ready:
+            await runtime.publish(
+                "request_summary_updated",
+                {
+                    "id": int(log_id),
+                    **{
+                        key: value
+                        for key, value in update_fields.items()
+                        if key not in {"request_body", "response_body", "payload_object_key"}
+                    },
+                },
+                persist=False,
+            )
 
     async def count_request_logs(
         self,
@@ -4964,8 +5389,6 @@ class Database:
                         OR COALESCE(gt.job_id, '') LIKE ?
                         OR COALESCE(rl.operation, '') LIKE ?
                         OR {status_text_expr} LIKE ?
-                        OR COALESCE(rl.request_body, '') LIKE ?
-                        OR COALESCE(rl.response_body, '') LIKE ?
                         OR COALESCE(t.email, '') LIKE ?
                         OR COALESCE(t.name, '') LIKE ?
                         OR COALESCE(k.label, '') LIKE ?
@@ -4973,7 +5396,7 @@ class Database:
                     )
                 """
                 like = f"%{search_text}%"
-                search_params = [like] * 10
+                search_params = [like] * 8
             tail_params: List[Any] = [*exc_ops, *search_params]
             if token_id is not None:
                 cursor = await db.execute(
@@ -5038,7 +5461,17 @@ class Database:
         async with self._connect() as db:
             db.row_factory = aiosqlite.Row
             payload_columns = "rl.request_body, rl.response_body," if include_payload else ""
-            response_excerpt_column = "substr(COALESCE(rl.response_body, ''), 1, 2048) as response_body_excerpt,"
+            has_summary = await self._column_exists(db, "request_logs", "response_excerpt")
+            response_excerpt_column = (
+                "COALESCE(rl.response_excerpt, '') as response_body_excerpt,"
+                if has_summary
+                else "substr(COALESCE(rl.response_body, ''), 1, 2048) as response_body_excerpt,"
+            )
+            payload_state_columns = (
+                "COALESCE(rl.payload_available, 0) AS payload_available, rl.payload_storage_error,"
+                if has_summary
+                else "0 AS payload_available, NULL AS payload_storage_error,"
+            )
             has_status_text = await self._column_exists(db, "request_logs", "status_text")
             has_progress = await self._column_exists(db, "request_logs", "progress")
             has_updated_at = await self._column_exists(db, "request_logs", "updated_at")
@@ -5056,8 +5489,6 @@ class Database:
                         OR COALESCE(gt.job_id, '') LIKE ?
                         OR COALESCE(rl.operation, '') LIKE ?
                         OR {status_text_expr} LIKE ?
-                        OR COALESCE(rl.request_body, '') LIKE ?
-                        OR COALESCE(rl.response_body, '') LIKE ?
                         OR COALESCE(t.email, '') LIKE ?
                         OR COALESCE(t.name, '') LIKE ?
                         OR COALESCE(k.label, '') LIKE ?
@@ -5065,7 +5496,7 @@ class Database:
                     )
                 """
                 like = f"%{search_text}%"
-                search_params = [like] * 10
+                search_params = [like] * 8
 
             if token_id:
                 cursor = await db.execute(
@@ -5077,6 +5508,7 @@ class Database:
                         rl.operation,
                         {payload_columns}
                         {response_excerpt_column}
+                        {payload_state_columns}
                         rl.status_code,
                         rl.duration,
                         {status_text_column}
@@ -5107,6 +5539,7 @@ class Database:
                         rl.operation,
                         {payload_columns}
                         {response_excerpt_column}
+                        {payload_state_columns}
                         rl.status_code,
                         rl.duration,
                         {status_text_column}
@@ -5137,6 +5570,7 @@ class Database:
                         rl.operation,
                         {payload_columns}
                         {response_excerpt_column}
+                        {payload_state_columns}
                         rl.status_code,
                         rl.duration,
                         {status_text_column}
@@ -5168,10 +5602,20 @@ class Database:
             has_status_text = await self._column_exists(db, "request_logs", "status_text")
             has_progress = await self._column_exists(db, "request_logs", "progress")
             has_updated_at = await self._column_exists(db, "request_logs", "updated_at")
+            has_summary = await self._column_exists(db, "request_logs", "payload_available")
             status_text_column = "rl.status_text," if has_status_text else "'' as status_text,"
             progress_column = "rl.progress," if has_progress else "0 as progress,"
             updated_at_column = "rl.updated_at," if has_updated_at else "rl.created_at as updated_at,"
             key_cols = "k.label AS api_key_label, k.key_prefix AS api_key_prefix,"
+            payload_detail_columns = (
+                "COALESCE(rl.payload_available, 0) AS payload_available, "
+                "rl.payload_object_key, rl.payload_storage_error, "
+                "COALESCE(rl.request_size_bytes, 0) AS request_size_bytes, "
+                "COALESCE(rl.response_size_bytes, 0) AS response_size_bytes,"
+                if has_summary
+                else "0 AS payload_available, NULL AS payload_object_key, "
+                "NULL AS payload_storage_error, 0 AS request_size_bytes, 0 AS response_size_bytes,"
+            )
             if api_key_id is None:
                 cursor = await db.execute(
                     f"""
@@ -5182,6 +5626,7 @@ class Database:
                         rl.operation,
                         rl.request_body,
                         rl.response_body,
+                        {payload_detail_columns}
                         rl.status_code,
                         rl.duration,
                         {status_text_column}
@@ -5211,6 +5656,7 @@ class Database:
                         rl.operation,
                         rl.request_body,
                         rl.response_body,
+                        {payload_detail_columns}
                         rl.status_code,
                         rl.duration,
                         {status_text_column}
@@ -5239,16 +5685,196 @@ class Database:
             await db.execute("DELETE FROM request_logs")
             await db.commit()
 
-    async def delete_request_logs_older_than(self, days: int = 3) -> int:
+    async def delete_request_logs_older_than(self, days: int = 7, batch_size: int = 500) -> int:
         """Delete request log rows older than the configured number of days."""
-        safe_days = max(1, int(days or 3))
+        safe_days = max(1, int(days or 7))
+        safe_batch = max(1, min(int(batch_size or 500), 5000))
         async with self._connect(write=True) as db:
             cursor = await db.execute(
-                "DELETE FROM request_logs WHERE datetime(created_at) < datetime('now', ?)",
-                (f"-{safe_days} days",),
+                """
+                DELETE FROM request_logs
+                WHERE id IN (
+                    SELECT id FROM request_logs
+                    WHERE datetime(created_at) < datetime('now', ?)
+                    ORDER BY id ASC
+                    LIMIT ?
+                )
+                """,
+                (f"-{safe_days} days", safe_batch),
             )
             await db.commit()
             return int(cursor.rowcount or 0)
+
+    async def cleanup_retention_batch(self, days: int = 7, batch_size: int = 500) -> Dict[str, int]:
+        """Apply bounded seven-day history cleanup in dependency-safe order."""
+        from ..services.failed_payload_store import summarize_payload
+
+        safe_days = max(1, int(days or 7))
+        safe_batch = max(1, min(int(batch_size or 500), 5000))
+        cutoff = f"-{safe_days} days"
+        counts = {
+            "request_logs": 0,
+            "api_key_audit_logs": 0,
+            "geminigen_tasks": 0,
+            "redis_persisted_events": 0,
+            "payload_bodies_compacted": 0,
+        }
+        async with self._connect(write=True) as db:
+            cursor = await db.execute(
+                """
+                SELECT id, request_body, response_body
+                FROM request_logs
+                WHERE datetime(created_at) >= datetime('now', ?)
+                  AND (
+                    length(COALESCE(request_body, '')) > 1024
+                    OR length(COALESCE(response_body, '')) > 1024
+                    OR (
+                        COALESCE(request_body, '') != ''
+                        AND COALESCE(request_excerpt, '') != COALESCE(request_body, '')
+                    )
+                    OR (
+                        COALESCE(response_body, '') != ''
+                        AND COALESCE(response_excerpt, '') != COALESCE(response_body, '')
+                    )
+                  )
+                ORDER BY id ASC
+                LIMIT ?
+                """,
+                (cutoff, safe_batch),
+            )
+            payload_rows = await cursor.fetchall()
+            payload_updates = []
+            for row in payload_rows:
+                request_body = str(row[1] or "")
+                response_body = str(row[2] or "")
+                request_summary = summarize_payload(request_body)
+                response_summary = summarize_payload(response_body)
+                payload_updates.append(
+                    (
+                        len(request_body.encode("utf-8", errors="replace")),
+                        len(response_body.encode("utf-8", errors="replace")),
+                        request_summary,
+                        response_summary,
+                        request_summary,
+                        response_summary,
+                        int(row[0]),
+                    )
+                )
+            if payload_updates:
+                await db.executemany(
+                    """
+                    UPDATE request_logs
+                    SET request_size_bytes = MAX(COALESCE(request_size_bytes, 0), ?),
+                        response_size_bytes = MAX(COALESCE(response_size_bytes, 0), ?),
+                        request_excerpt = ?, response_excerpt = ?,
+                        request_body = ?, response_body = ?
+                    WHERE id = ?
+                    """,
+                    payload_updates,
+                )
+            counts["payload_bodies_compacted"] = len(payload_updates)
+
+            cursor = await db.execute(
+                """
+                DELETE FROM geminigen_tasks
+                WHERE id IN (
+                    SELECT id FROM geminigen_tasks
+                    WHERE status NOT IN ('queued', 'processing')
+                      AND datetime(COALESCE(completed_at, updated_at, created_at)) < datetime('now', ?)
+                    ORDER BY id ASC
+                    LIMIT ?
+                )
+                """,
+                (cutoff, safe_batch),
+            )
+            counts["geminigen_tasks"] = int(cursor.rowcount or 0)
+
+            cursor = await db.execute(
+                """
+                DELETE FROM api_key_audit_logs
+                WHERE id IN (
+                    SELECT id FROM api_key_audit_logs
+                    WHERE datetime(created_at) < datetime('now', ?)
+                    ORDER BY id ASC
+                    LIMIT ?
+                )
+                """,
+                (cutoff, safe_batch),
+            )
+            counts["api_key_audit_logs"] = int(cursor.rowcount or 0)
+
+            cursor = await db.execute(
+                """
+                DELETE FROM request_logs
+                WHERE id IN (
+                    SELECT id FROM request_logs
+                    WHERE datetime(created_at) < datetime('now', ?)
+                    ORDER BY id ASC
+                    LIMIT ?
+                )
+                """,
+                (cutoff, safe_batch),
+            )
+            counts["request_logs"] = int(cursor.rowcount or 0)
+
+            cursor = await db.execute(
+                """
+                DELETE FROM redis_persisted_events
+                WHERE cursor IN (
+                    SELECT cursor FROM redis_persisted_events
+                    WHERE datetime(persisted_at) < datetime('now', ?)
+                    ORDER BY persisted_at ASC
+                    LIMIT ?
+                )
+                """,
+                (cutoff, safe_batch),
+            )
+            counts["redis_persisted_events"] = int(cursor.rowcount or 0)
+            await db.commit()
+        return counts
+
+    async def optimize_after_retention(self) -> None:
+        """Run bounded SQLite maintenance after retention cleanup."""
+        async with self._connect(write=True) as db:
+            await db.execute("PRAGMA wal_checkpoint(PASSIVE)")
+            await db.execute("PRAGMA optimize")
+            await db.execute("PRAGMA incremental_vacuum(2000)")
+            await db.commit()
+
+    async def set_request_log_payload_metadata(
+        self,
+        log_id: int,
+        *,
+        payload_available: bool,
+        payload_object_key: Optional[str],
+        payload_storage_error: Optional[str],
+    ) -> None:
+        async with self._connect(write=True) as db:
+            await db.execute(
+                """
+                UPDATE request_logs
+                SET payload_available = ?, payload_object_key = ?,
+                    payload_storage_error = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (
+                    1 if payload_available else 0,
+                    payload_object_key,
+                    payload_storage_error,
+                    int(log_id),
+                ),
+            )
+            await db.commit()
+        if self.event_runtime is not None and self.event_runtime.ready:
+            await self.event_runtime.publish(
+                "request_summary_updated",
+                {
+                    "id": int(log_id),
+                    "payload_available": bool(payload_available),
+                    "payload_storage_error": payload_storage_error,
+                },
+                persist=False,
+            )
 
     async def upsert_cache_file(
         self,
@@ -6438,7 +7064,8 @@ class Database:
             cursor = await db.execute(
                 """
                 SELECT
-                    k.*,
+                    k.id, k.label, k.key_prefix, k.scopes, k.is_active,
+                    k.expires_at,
                     c.name AS client_name,
                     strftime('%s', k.expires_at) AS expires_unix
                 FROM api_keys k
@@ -6450,6 +7077,52 @@ class Database:
             )
             row = await cursor.fetchone()
             return dict(row) if row else None
+
+    async def list_api_key_auth_cache_seed(self, limit: int = 5000) -> List[Dict[str, Any]]:
+        """Return managed-key auth records and assignments for startup warming."""
+        async with self._connect() as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                """
+                SELECT
+                    k.id, k.key_hash, k.label, k.key_prefix, k.scopes, k.is_active,
+                    k.expires_at, c.name AS client_name,
+                    strftime('%s', k.expires_at) AS expires_unix
+                FROM api_keys k
+                JOIN api_clients c ON c.id = k.client_id
+                ORDER BY k.id ASC
+                LIMIT ?
+                """,
+                (max(1, min(int(limit), 10_000)),),
+            )
+            records = [dict(row) for row in await cursor.fetchall()]
+        for record in records:
+            record["account_ids"] = await self.get_api_key_account_ids(int(record["id"]))
+        return records
+
+    async def list_active_task_progress_seed(self, limit: int = 5000) -> List[Dict[str, Any]]:
+        """Return active task progress from every durable task table."""
+        safe_limit = max(1, min(int(limit), 10_000))
+        async with self._connect() as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                """
+                SELECT 'native' AS task_kind, task_id, status, progress, job_phase, created_at
+                FROM tasks
+                WHERE status NOT IN ('completed', 'failed', 'cancelled', 'canceled')
+                UNION ALL
+                SELECT 'geminigen', job_id, status, progress, NULL, created_at
+                FROM geminigen_tasks
+                WHERE status IN ('queued', 'processing')
+                UNION ALL
+                SELECT 'runway', job_id, status, progress, NULL, created_at
+                FROM runway_tasks
+                WHERE status NOT IN ('completed', 'failed', 'cancelled', 'canceled')
+                LIMIT ?
+                """,
+                (safe_limit,),
+            )
+            return [dict(row) for row in await cursor.fetchall()]
 
     async def get_api_key_account_ids(self, key_id: int, existing_only: bool = False) -> List[int]:
         async with self._connect() as db:
@@ -7054,3 +7727,66 @@ class Database:
             )
             await db.commit()
         return await self.get_token_refresh_config()
+
+    async def apply_redis_event_batch(self, events: List[Dict[str, Any]]) -> int:
+        """Persist idempotent Redis events in one SQLite transaction."""
+        if not events:
+            return 0
+        applied = 0
+        async with self._connect(write=True) as db:
+            for event in events[:100]:
+                cursor = str(event.get("cursor") or "").strip()
+                event_type = str(event.get("type") or "").strip()
+                data = event.get("data") if isinstance(event.get("data"), dict) else {}
+                if not cursor or not event_type:
+                    continue
+                marker = await db.execute(
+                    "INSERT OR IGNORE INTO redis_persisted_events (cursor, event_type) VALUES (?, ?)",
+                    (cursor, event_type),
+                )
+                if int(marker.rowcount or 0) == 0:
+                    continue
+                if event_type == "usage_touch":
+                    key_id = int(data.get("api_key_id") or 0)
+                    if key_id > 0:
+                        await db.execute(
+                            "UPDATE api_keys SET last_used_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                            (key_id,),
+                        )
+                elif event_type == "api_key_audit":
+                    await db.execute(
+                        """
+                        INSERT INTO api_key_audit_logs
+                            (api_key_id, endpoint, account_id, status_code, detail, ip, user_agent)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            data.get("api_key_id"),
+                            str(data.get("endpoint") or "")[:300],
+                            data.get("account_id"),
+                            int(data.get("status_code") or 0),
+                            str(data.get("detail") or "")[:300],
+                            str(data.get("ip") or "")[:120],
+                            str(data.get("user_agent") or "")[:200],
+                        ),
+                    )
+                applied += 1
+            await db.commit()
+        return applied
+
+
+def create_database() -> Database:
+    """Create the configured database backend for the temporary bridge release.
+
+    Direct ``Database(path)`` construction remains SQLite-compatible for the
+    offline importer and existing tests. The application uses this factory so
+    all service-facing method signatures remain unchanged.
+    """
+    from .database_runtime import DatabaseSettings
+
+    settings = DatabaseSettings.from_env()
+    if settings.backend == "postgres":
+        from .postgres_database import PostgresDatabase
+
+        return PostgresDatabase(settings=settings)
+    return Database()

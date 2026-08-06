@@ -1505,20 +1505,9 @@ class GeminiGenService:
         if kind == "video" and not bool(getattr(cfg, "video_enabled", True)):
             raise RuntimeError("GeminiGen video mode is disabled")
         job_id = f"geminigen-{datetime.utcnow().strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:8]}"
-        request_log_id = await self._create_request_log(
-            api_key_id=api_key_id,
-            kind=kind,
-            public_model_id=public_model_id,
-            endpoint_type=str(manifest["endpoint_type"]),
-            prompt=prompt,
-            image_count=len(images or []),
-            options=options or {},
-            job_id=job_id,
-        )
         queued = GeminiGenTask(
             job_id=job_id,
             api_key_id=api_key_id,
-            request_log_id=request_log_id,
             public_model_id=public_model_id,
             kind=kind,
             endpoint_type=str(manifest["endpoint_type"]),
@@ -1527,7 +1516,31 @@ class GeminiGenService:
             progress=0,
             request_payload=json.dumps({"images": len(images or []), "options": options or {}}, ensure_ascii=False),
         )
-        await self.db.create_geminigen_task(queued)
+        request_log = RequestLog(
+            token_id=None,
+            api_key_id=api_key_id,
+            operation=GEMINIGEN_OPERATION_BY_KIND.get(kind, "geminigen_image"),
+            request_body=self._safe_log_json(
+                {
+                    "provider": "geminigen",
+                    "job_id": job_id,
+                    "model": public_model_id,
+                    "endpoint_type": str(manifest["endpoint_type"]),
+                    "prompt": prompt,
+                    "image_count": len(images or []),
+                    "options": options or {},
+                }
+            ),
+            response_body=self._safe_log_json({"status": "queued", "job_id": job_id}),
+            status_code=102,
+            duration=0,
+            status_text="geminigen_queued",
+            progress=0,
+        )
+        queued.request_log_id = await self.db.create_geminigen_task_with_request_log(
+            queued,
+            request_log,
+        )
         return queued
 
     async def start_and_complete_queued_task_in_background(
