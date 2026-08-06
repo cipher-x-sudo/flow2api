@@ -657,6 +657,30 @@ class Config:
         self._config["generation_routing"]["flow2api_cloning_model"] = str(value or "gemini-2.5-flash")
 
     @property
+    def cliproxy_base_url(self) -> str:
+        """Private CLIProxy inference/management origin (environment only)."""
+        return _env_value("FLOW2API_CLIPROXY_BASE_URL").rstrip("/")
+
+    @property
+    def cliproxy_public_url(self) -> str:
+        """Public CLIProxy origin used for OAuth callbacks and break-glass UI."""
+        return _env_value("FLOW2API_CLIPROXY_PUBLIC_URL").rstrip("/")
+
+    @property
+    def cliproxy_api_key(self) -> str:
+        """CLIProxy inference key. This value is never database-backed."""
+        return _env_value("FLOW2API_CLIPROXY_API_KEY")
+
+    @property
+    def cliproxy_management_key(self) -> str:
+        """CLIProxy management key. This value is never database-backed."""
+        return _env_value("FLOW2API_CLIPROXY_MANAGEMENT_KEY")
+
+    @property
+    def cliproxy_version(self) -> str:
+        return _env_value("FLOW2API_CLIPROXY_VERSION") or "v7.2.120"
+
+    @property
     def flow2api_cloning_backend(self) -> str:
         return str(self._config.get("generation_routing", {}).get("flow2api_cloning_backend", "gemini_native") or "gemini_native")
 

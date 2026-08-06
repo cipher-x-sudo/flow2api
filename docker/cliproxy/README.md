@@ -1,0 +1,28 @@
+# CLIProxyAPI Railway service
+
+Create a second Railway service from this directory and attach a persistent
+volume at `/data`. The image is pinned to CLIProxyAPI `v7.2.120`.
+
+Required variables on the CLIProxy service:
+
+- `CLIPROXY_CLIENT_API_KEY`: a URL-safe key used only by Flow2API inference.
+- `MANAGEMENT_PASSWORD`: a separate strong management key. CLIProxy reads it
+  from the environment and never writes it to the volume.
+
+Required variables on the Flow2API service:
+
+- `FLOW2API_CLIPROXY_BASE_URL=http://cliproxy.railway.internal:8317`
+- `FLOW2API_CLIPROXY_PUBLIC_URL=https://<cliproxy-public-domain>`
+- `FLOW2API_CLIPROXY_API_KEY=<same client key>`
+- `FLOW2API_CLIPROXY_MANAGEMENT_KEY=<same management key>`
+- `FLOW2API_CLIPROXY_VERSION=v7.2.120` (optional display override)
+
+The bootstrap creates `/data/config.yaml` only once. Later management changes,
+OAuth credentials, account status, aliases, and exclusions remain on the
+volume. Inference uses Railway private networking. Expose port `8317` publicly
+only for OAuth callbacks and protected break-glass access to
+`/management.html`.
+
+Image and video generation are disabled, while image inputs to chat completion
+requests remain available for prompt cloning and metadata analysis.
+

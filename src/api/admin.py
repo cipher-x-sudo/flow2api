@@ -5333,3 +5333,14 @@ async def plugin_check_tokens(
             "credits": row.get("credits", 0),
         })
     return {"success": True, "tokens": result}
+
+
+# Keep the CLIProxy surface in a small, auditable allowlist module. Every route
+# inherits the same persistent admin-session check used throughout this API.
+from .cliproxy_admin import router as cliproxy_admin_router
+
+router.include_router(
+    cliproxy_admin_router,
+    prefix="/api/admin/cliproxy",
+    dependencies=[Depends(verify_admin_token)],
+)
