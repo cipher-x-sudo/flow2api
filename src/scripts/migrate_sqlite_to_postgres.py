@@ -183,8 +183,10 @@ def _selected_rows(
     cutoff = (_utc_now() - timedelta(days=retention_days)).strftime("%Y-%m-%d %H:%M:%S")
     where, parameters = _history_where(table, set(columns), cutoff) if table in HISTORY_TABLES else ("", ())
     primary = [column for column in _sqlite_primary_key(connection, table) if column in columns]
-    order = f' ORDER BY {", ".join(f"\"{column}\"" for column in primary)}' if primary else ""
-    query = f'SELECT {", ".join(f"\"{column}\"" for column in columns)} FROM "{table}" {where}{order}'
+    quoted_primary = ", ".join('"' + column.replace('"', '""') + '"' for column in primary)
+    quoted_columns = ", ".join('"' + column.replace('"', '""') + '"' for column in columns)
+    order = f" ORDER BY {quoted_primary}" if primary else ""
+    query = f'SELECT {quoted_columns} FROM "{table}" {where}{order}'
     yield from connection.execute(query, parameters)
 
 

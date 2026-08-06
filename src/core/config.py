@@ -135,6 +135,9 @@ def get_runtime_data_dir() -> Path:
 
 def get_runtime_tmp_dir() -> Path:
     """Return the directory that should hold generated/cache files."""
+    explicit_tmp = _env_value("FLOW2API_TMP_DIR")
+    if explicit_tmp:
+        return Path(explicit_tmp).expanduser()
     volume_mount = _env_value("RAILWAY_VOLUME_MOUNT_PATH")
     if volume_mount:
         return Path(volume_mount).expanduser() / "tmp"

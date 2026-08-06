@@ -36,7 +36,10 @@ FLOW2API_DB_POOL_MAX_SIZE=10
 FLOW2API_DB_POOL_TIMEOUT_SECONDS=5
 FLOW2API_DB_STATEMENT_TIMEOUT_SECONDS=30
 FLOW2API_REQUIRE_CUTOVER_MARKER=true
+FLOW2API_TMP_DIR=/tmp/flow2api
 ```
+
+`FLOW2API_TMP_DIR` must point to ephemeral container storage with enough free space for the SQLite snapshot, plaintext archive, encrypted archive, and restore extraction. Do not stage these multi-gigabyte files on the 5 GB persistent application volume.
 
 Create a 32-byte encryption key offline, then store:
 
