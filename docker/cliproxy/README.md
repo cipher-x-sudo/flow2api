@@ -26,7 +26,7 @@ only for OAuth callbacks and protected break-glass access to
 Image and video generation are disabled, while image inputs to chat completion
 requests remain available for prompt cloning and metadata analysis.
 
-## Import all Codex accounts from Cockpit Tools
+## Import all Codex or Antigravity accounts from Cockpit Tools
 
 Cockpit Tools v1.3.15 can export the selected Codex accounts as one portable
 JSON array. In Cockpit, select all required accounts, click Export, keep the
@@ -35,6 +35,12 @@ AI Gateway → Add account → Credential file**, select **Codex**, choose that 
 file, and click **Import account(s)**. Flow2API converts both portable Cockpit
 records and older nested `tokens` records, strips unrelated sensitive note
 fields, and imports up to 100 accounts in one action.
+
+The same workflow applies on Cockpit's Antigravity account page: select the
+accounts, export the single JSON file, choose **Gemini / Antigravity** in
+Flow2API, and import it once. Cockpit's Antigravity export contains each
+account's refresh token; CLIProxy refreshes the access token and discovers the
+Google Cloud project on the first request.
 
 After confirming the imported accounts are healthy, stop Cockpit's local API
 Service for those accounts. Running both gateways against the same rotating

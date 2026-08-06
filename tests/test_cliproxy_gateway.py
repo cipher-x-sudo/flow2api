@@ -115,6 +115,48 @@ class CLIProxyInferenceTests(unittest.IsolatedAsyncioTestCase):
 
 
 class CLIProxyManagementTests(unittest.IsolatedAsyncioTestCase):
+    async def test_cockpit_antigravity_bundle_imports_refresh_tokens(self):
+        client = _StubManagement()
+        bundle = [
+            {
+                "email": "gemini-one@example.com",
+                "refresh_token": "refresh-one",
+                "tags": ["private"],
+                "notes": "do-not-forward",
+            },
+            {
+                "email": "gemini-two@example.com",
+                "token": {
+                    "access_token": "access-two",
+                    "refresh_token": "refresh-two",
+                    "expires_in": 3600,
+                    "expiry_timestamp": 1_800_000_000,
+                    "project_id": "project-two",
+                },
+            },
+        ]
+
+        result = await client.import_credential_file(
+            platform="antigravity",
+            filename="antigravity_accounts.json",
+            content=json.dumps(bundle).encode(),
+        )
+
+        self.assertTrue(result.success)
+        self.assertEqual(result.imported, 2)
+        upload_calls = [call for call in client.calls if call[:2] == ("POST", "auth-files")]
+        self.assertEqual(len(upload_calls), 2)
+        payloads = [json.loads(call[2]["content"]) for call in upload_calls]
+        self.assertEqual(payloads[0]["type"], "antigravity")
+        self.assertEqual(payloads[0]["access_token"], "")
+        self.assertEqual(payloads[0]["refresh_token"], "refresh-one")
+        self.assertEqual(payloads[1]["access_token"], "access-two")
+        self.assertEqual(payloads[1]["project_id"], "project-two")
+        rendered = json.dumps(payloads)
+        self.assertNotIn("do-not-forward", rendered)
+        self.assertNotIn("notes", rendered)
+        self.assertNotIn("tags", rendered)
+
     async def test_cockpit_bundle_imports_all_accounts_and_strips_unrelated_secrets(self):
         client = _StubManagement()
         bundle = [
@@ -372,6 +414,15 @@ class CLIProxySecurityTests(unittest.TestCase):
                 content=b'["not-an-account"]',
             )
         self.assertEqual(shape_error.exception.status_code, 400)
+
+        with self.assertRaises(HTTPException) as unsupported_bundle:
+            prepare_credential_imports(
+                platform="gemini",
+                filename="accounts.json",
+                content=json.dumps([{"refresh_token": "secret"}]).encode(),
+            )
+        self.assertEqual(unsupported_bundle.exception.status_code, 400)
+        self.assertNotIn("secret", unsupported_bundle.exception.detail)
 
     def test_model_namespaces_and_secret_redaction(self):
         self.assertEqual(namespaced_model("anthropic", "sonnet"), "claude/sonnet")

@@ -312,6 +312,61 @@ def _normalize_cockpit_codex_credential(item: Dict[str, Any], index: int) -> Dic
     }
 
 
+def _normalize_cockpit_antigravity_credential(
+    item: Dict[str, Any], index: int
+) -> Dict[str, Any]:
+    declared = _string_field(item, "type", "provider")
+    if declared and canonical_platform(declared) != "antigravity":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Credential bundle item {index + 1} is {declared}, not antigravity",
+        )
+
+    nested = item.get("token") or item.get("tokens")
+    tokens = nested if isinstance(nested, dict) else item
+    refresh_token = _string_field(tokens, "refresh_token", "refreshToken")
+    if not refresh_token:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Credential bundle item {index + 1} is missing refresh_token",
+        )
+    access_token = _string_field(tokens, "access_token", "accessToken")
+    email = _string_field(item, "email") or _string_field(tokens, "email")
+    project_id = _string_field(tokens, "project_id", "projectId") or _string_field(
+        item, "project_id", "projectId"
+    )
+    expires_in_raw = tokens.get("expires_in", tokens.get("expiresIn", 0))
+    try:
+        expires_in = max(0, int(expires_in_raw or 0))
+    except (TypeError, ValueError):
+        expires_in = 0
+    timestamp_raw = tokens.get("timestamp", item.get("timestamp", 0))
+    try:
+        timestamp = max(0, int(timestamp_raw or 0))
+    except (TypeError, ValueError):
+        timestamp = 0
+    expired = _timestamp_iso(
+        tokens.get("expired")
+        or item.get("expired")
+        or tokens.get("expiry_timestamp")
+        or tokens.get("expiryTimestamp")
+    )
+
+    # Cockpit's portable Antigravity export intentionally contains only email
+    # and refresh_token. CLIProxy uses the same OAuth client and can obtain a
+    # fresh access token and project ID on the first inference request.
+    return {
+        "type": "antigravity",
+        "email": email,
+        "access_token": access_token,
+        "refresh_token": refresh_token,
+        "expires_in": expires_in,
+        "timestamp": timestamp,
+        "expired": expired,
+        "project_id": project_id,
+    }
+
+
 def _credential_filename(platform: str, item: Dict[str, Any], index: int, used: set[str]) -> str:
     identity = _string_field(item, "email", "account_id") or f"account-{index + 1}"
     safe_identity = _UNSAFE_FILENAME_RE.sub("-", identity).strip(".-_") or f"account-{index + 1}"
@@ -339,10 +394,10 @@ def prepare_credential_imports(
 
     is_bundle = isinstance(decoded, list)
     if is_bundle:
-        if canonical != "codex":
+        if canonical not in {"codex", "antigravity"}:
             raise HTTPException(
                 status_code=400,
-                detail="Multi-account credential bundles are currently supported for Codex exports",
+                detail="Multi-account credential bundles are supported for Codex and Antigravity exports",
             )
         if not decoded:
             raise HTTPException(status_code=400, detail="Credential bundle is empty")
@@ -365,7 +420,12 @@ def prepare_credential_imports(
                 status_code=400,
                 detail=f"Credential bundle item {index + 1} must be a JSON object",
             )
-        normalized = _normalize_cockpit_codex_credential(raw, index) if canonical == "codex" else raw
+        if canonical == "codex":
+            normalized = _normalize_cockpit_codex_credential(raw, index)
+        elif canonical == "antigravity":
+            normalized = _normalize_cockpit_antigravity_credential(raw, index)
+        else:
+            normalized = raw
         if is_bundle:
             name = _credential_filename(canonical, normalized, index, used_names)
         else:
