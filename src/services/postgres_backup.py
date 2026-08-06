@@ -22,6 +22,21 @@ from psycopg.conninfo import conninfo_to_dict
 ENCRYPTED_BACKUP_MAGIC = b"F2APGBAK2"
 ENCRYPTED_BACKUP_FORMAT_VERSION = 2
 STREAM_CHUNK_BYTES = 4 * 1024 * 1024
+VOLATILE_PROFILE_DIRECTORIES = {
+    "BrowserMetrics",
+    "Cache",
+    "Code Cache",
+    "Crashpad",
+    "DawnGraphiteCache",
+    "DawnWebGPUCache",
+    "GPUCache",
+    "GrShaderCache",
+    "GraphiteDawnCache",
+    "Sessions",
+    "ShaderCache",
+    "component_crx_cache",
+    "extensions_crx_cache",
+}
 
 
 class PostgresBackupError(RuntimeError):
@@ -164,7 +179,7 @@ def decrypt_archive(source: Path, destination: Path, *, keys: dict[str, bytes]) 
 
 def _profile_excluded(relative: Path) -> bool:
     return (
-        "BrowserMetrics" in set(relative.parts)
+        bool(VOLATILE_PROFILE_DIRECTORIES.intersection(relative.parts))
         or relative.name.startswith("Singleton")
         or relative.name.endswith(".part")
     )
@@ -185,6 +200,7 @@ def _archive_files(
         }
     ]
     profiles: list[tuple[Path, str]] = []
+    snapshot_root = working_dir / "browser-profile-snapshot"
     if profiles_root.is_dir():
         for source in profiles_root.rglob("*"):
             if not source.is_file() or source.is_symlink():
@@ -193,10 +209,22 @@ def _archive_files(
             if _profile_excluded(relative):
                 continue
             archive_name = str(PurePosixPath("browser_profiles", *relative.parts))
+            snapshot = snapshot_root / relative
+            snapshot.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                shutil.copy2(source, snapshot)
+            except FileNotFoundError:
+                # Chromium rotates session/cache files while a profile is live.
+                # The durable profile state is still captured by the retained files.
+                continue
             entries.append(
-                {"path": archive_name, "size": source.stat().st_size, "sha256": _sha256_file(source)}
+                {
+                    "path": archive_name,
+                    "size": snapshot.stat().st_size,
+                    "sha256": _sha256_file(snapshot),
+                }
             )
-            profiles.append((source, archive_name))
+            profiles.append((snapshot, archive_name))
     manifest["files"] = entries
     manifest_path = working_dir / "manifest.json"
     manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")

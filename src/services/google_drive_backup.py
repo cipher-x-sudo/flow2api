@@ -45,6 +45,21 @@ OAUTH_SCOPES = "openid email https://www.googleapis.com/auth/drive.file"
 BACKUP_FOLDER_NAME = "Flow2API Backups"
 BACKUP_FORMAT_VERSION = 1
 UPLOAD_CHUNK_BYTES = 8 * 1024 * 1024
+VOLATILE_PROFILE_DIRECTORIES = {
+    "BrowserMetrics",
+    "Cache",
+    "Code Cache",
+    "Crashpad",
+    "DawnGraphiteCache",
+    "DawnWebGPUCache",
+    "GPUCache",
+    "GrShaderCache",
+    "GraphiteDawnCache",
+    "Sessions",
+    "ShaderCache",
+    "component_crx_cache",
+    "extensions_crx_cache",
+}
 
 
 class GoogleDriveBackupError(RuntimeError):
@@ -117,7 +132,7 @@ def _excluded_profile_path(relative: Path) -> bool:
     names = set(relative.parts)
     name = relative.name
     return (
-        "BrowserMetrics" in names
+        bool(VOLATILE_PROFILE_DIRECTORIES.intersection(names))
         or name.startswith("Singleton")
         or name.endswith(".part")
     )

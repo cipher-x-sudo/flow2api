@@ -52,7 +52,7 @@ def test_archive_preserves_profile_data_and_excludes_runtime_metrics(tmp_path):
     names = {entry["path"] for entry in manifest["files"]}
     assert "database/flow.db" in names
     assert "browser_profiles/token-1/Default/Cookies" in names
-    assert "browser_profiles/token-1/Default/Cache" in names
+    assert "browser_profiles/token-1/Default/Cache" not in names
     assert all("BrowserMetrics" not in name for name in names)
     assert all("Singleton" not in name for name in names)
     assert all(not name.endswith(".part") for name in names)
