@@ -432,6 +432,27 @@ curl -X POST "http://localhost:8000/v1/chat/completions" \
   }'
 ```
 
+### Optional Flow project pinning
+
+Native Flow image and video requests use automatic project rotation by default. To keep generated assets in a specific tracked project, give the managed API key the `projects:read` scope, list its available projects, and pass `project_id` with the generation request:
+
+```bash
+curl "http://localhost:8000/v1/projects?limit=100" \
+  -H "Authorization: Bearer <managed-api-key>"
+
+curl -X POST "http://localhost:8000/v1/chat/completions" \
+  -H "Authorization: Bearer <managed-api-key>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gemini-3.1-flash-image-landscape",
+    "project_id": "<flow-project-id>",
+    "messages": [{"role": "user", "content": "A cute cat playing in a garden"}],
+    "stream": true
+  }'
+```
+
+The project must be active, belong to that API key, and use an account assigned to the key. Omit `project_id` to retain automatic routing. Project pinning applies only to native Flow models, not Runway or GeminiGen providers.
+
 ### Image-to-image
 
 ```bash

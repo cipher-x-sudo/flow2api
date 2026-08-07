@@ -77,6 +77,7 @@ const KEY_PROJECT_PAGE_SIZE = 10
 
 const AVAILABLE_SCOPES: ScopeOption[] = [
   { id: "models:read", label: "Read models", description: "Allows `/v1/models`, `/v1/models/aliases`, and Gemini model listing endpoints." },
+  { id: "projects:read", label: "Read projects", description: "Allows listing projects assigned to this API key for optional project pinning." },
   { id: "generate:chat", label: "Generate chat", description: "Allows `/v1/chat/completions` (stream and non-stream)." },
   { id: "generate:gemini", label: "Generate gemini", description: "Allows Gemini `generateContent` and `streamGenerateContent` endpoints." },
   {

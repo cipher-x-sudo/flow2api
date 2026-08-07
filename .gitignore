@@ -6,6 +6,7 @@ __pycache__/
 .Python
 env/
 venv/
+.venv/
 ENV/
 build/
 develop-eggs/
@@ -83,6 +84,7 @@ tests/*
 !tests/test_performance_runtime.py
 !tests/test_postgres_bridge.py
 !tests/test_postgres_integration.py
+!tests/test_project_pinning.py
 
 # Root GUI static build (keep local-only)
 /static/

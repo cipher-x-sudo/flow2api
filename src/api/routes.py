@@ -1392,6 +1392,8 @@ def _enrich_payload_with_direct_url(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _with_projectid(payload: Dict[str, Any], project_id: Optional[str]) -> Dict[str, Any]:
+    if project_id and not payload.get("project_id"):
+        payload["project_id"] = project_id
     return payload
 
 
@@ -1673,7 +1675,16 @@ def _inject_projectid_into_openai_sse_chunk(
     chunk: str,
     project_id: Optional[str],
 ) -> str:
-    return chunk
+    if not project_id or not chunk.startswith("data: "):
+        return chunk
+    payload_text = chunk[6:].strip()
+    if payload_text == "[DONE]":
+        return chunk
+    payload = _parse_handler_result(payload_text)
+    if not isinstance(payload, dict):
+        return chunk
+    payload = _with_projectid(payload, project_id)
+    return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
 
 async def _build_image_parts_from_uri(
@@ -1980,6 +1991,8 @@ async def _resolve_project_pin(
                 status_code=400,
                 detail="project_id not found for this API key",
             )
+        if not bool(proj.is_active):
+            raise HTTPException(status_code=400, detail="project_id is inactive")
         tid = int(proj.token_id)
         if tid not in auth_ctx.allowed_accounts:
             raise HTTPException(
@@ -1990,21 +2003,27 @@ async def _resolve_project_pin(
     proj = await handler.db.get_project_by_id(pid, None)
     if not proj:
         raise HTTPException(status_code=400, detail="project_id not found")
+    if not bool(proj.is_active):
+        raise HTTPException(status_code=400, detail="project_id is inactive")
     return ({int(proj.token_id)}, pid)
 
 
-def _reject_explicit_project_id(project_id: Optional[str]) -> None:
-    if _strip_optional_project_id(project_id):
-        raise HTTPException(
-            status_code=400,
-            detail="project_id is not accepted; it is selected automatically",
-        )
+async def _select_generation_target(
+    auth_ctx: AuthContext,
+    model: str,
+    project_id: Optional[str],
+) -> Tuple[Set[int], Optional[str]]:
+    """Use an authorized project pin when provided, otherwise retain automatic routing."""
+    pinned_token_ids, pinned_project_id = await _resolve_project_pin(project_id, auth_ctx)
+    if pinned_project_id:
+        return (pinned_token_ids or set(), pinned_project_id)
+    return await _select_random_active_project_for_api_key(auth_ctx, model)
 
 
 async def _select_random_active_project_for_api_key(
     auth_ctx: AuthContext,
     model: str,
-) -> Tuple[Set[int], str]:
+) -> Tuple[Set[int], Optional[str]]:
     if auth_ctx.key_id is None:
         raise HTTPException(status_code=403, detail="Managed API key required for generation")
     if not auth_ctx.allowed_accounts:
@@ -2128,7 +2147,6 @@ async def list_flow_projects(
     auth_ctx: AuthContext = Depends(verify_api_key_flexible),
 ):
     """List VideoFX projects visible to this managed API key (optional filter by account / token id)."""
-    raise HTTPException(status_code=410, detail="Project management APIs have been removed")
     if auth_ctx.key_id is None:
         raise HTTPException(status_code=403, detail="Managed API key required")
     _require_managed_projects_read(auth_ctx)
@@ -2165,7 +2183,6 @@ async def get_flow_project(
     auth_ctx: AuthContext = Depends(verify_api_key_flexible),
 ):
     """Return one VideoFX project row if it belongs to this managed API key."""
-    raise HTTPException(status_code=410, detail="Project management APIs have been removed")
     if auth_ctx.key_id is None:
         raise HTTPException(status_code=403, detail="Managed API key required")
     _require_managed_projects_read(auth_ctx)
@@ -2859,7 +2876,6 @@ async def create_chat_completion(
     try:
         if auth_ctx.key_id is None:
             raise HTTPException(status_code=403, detail="Managed API key required for generation")
-        _reject_explicit_project_id(request.project_id)
         base_allowed = _resolve_allowed_token_ids(auth_ctx)
         normalized = await _normalize_openai_request(
             request,
@@ -2871,6 +2887,8 @@ async def create_chat_completion(
 
         request_base_url = _get_request_base_url(raw_request)
         if _is_runway_model(normalized.model):
+            if normalized.project_id:
+                raise HTTPException(status_code=400, detail="project_id is only supported for native Flow models")
             _require_runway_scope(auth_ctx)
             if request.stream:
                 return StreamingResponse(
@@ -2897,6 +2915,8 @@ async def create_chat_completion(
             )
 
         if _is_geminigen_model(normalized.model):
+            if normalized.project_id:
+                raise HTTPException(status_code=400, detail="project_id is only supported for native Flow models")
             _require_geminigen_scope(auth_ctx)
             await _require_geminigen_model_enabled(normalized.model)
             if request.stream:
@@ -2923,9 +2943,10 @@ async def create_chat_completion(
                 )
             )
 
-        allowed_token_ids, selected_project_id = await _select_random_active_project_for_api_key(
+        allowed_token_ids, selected_project_id = await _select_generation_target(
             auth_ctx,
             normalized.model,
+            normalized.project_id,
         )
         normalized = replace(normalized, project_id=selected_project_id)
         selection_context = _build_selection_context(auth_ctx, allowed_token_ids, selected_project_id)
@@ -2979,7 +3000,6 @@ async def create_chat_completion_async(
     try:
         if auth_ctx.key_id is None:
             raise HTTPException(status_code=403, detail="Managed API key required for generation")
-        _reject_explicit_project_id(request.project_id)
         base_allowed = _resolve_allowed_token_ids(auth_ctx)
         normalized = await _normalize_openai_request(
             request,
@@ -2991,6 +3011,8 @@ async def create_chat_completion_async(
 
         request_base_url = _get_request_base_url(raw_request)
         if _is_runway_model(normalized.model):
+            if normalized.project_id:
+                raise HTTPException(status_code=400, detail="project_id is only supported for native Flow models")
             _require_runway_scope(auth_ctx)
             task = await _start_runway_from_openai_request(
                 request,
@@ -3008,6 +3030,8 @@ async def create_chat_completion_async(
             )
 
         if _is_geminigen_model(normalized.model):
+            if normalized.project_id:
+                raise HTTPException(status_code=400, detail="project_id is only supported for native Flow models")
             _require_geminigen_scope(auth_ctx)
             await _require_geminigen_model_enabled(normalized.model)
             task = await _enqueue_geminigen_from_request(
@@ -3029,9 +3053,10 @@ async def create_chat_completion_async(
                 content=geminigen_service.task_to_public_dict(task),
             )
 
-        allowed_token_ids, selected_project_id = await _select_random_active_project_for_api_key(
+        allowed_token_ids, selected_project_id = await _select_generation_target(
             auth_ctx,
             normalized.model,
+            normalized.project_id,
         )
         normalized = replace(normalized, project_id=selected_project_id)
         selection_context = _build_selection_context(auth_ctx, allowed_token_ids, selected_project_id)
@@ -3164,7 +3189,6 @@ async def generate_content(
     try:
         if auth_ctx.key_id is None:
             raise HTTPException(status_code=403, detail="Managed API key required for generation")
-        _reject_explicit_project_id(request.project_id)
         base_allowed = _resolve_allowed_token_ids(auth_ctx)
         normalized = await _normalize_gemini_request(
             model,
@@ -3177,6 +3201,8 @@ async def generate_content(
 
         request_base_url = _get_request_base_url(raw_request)
         if _is_geminigen_model(normalized.model):
+            if normalized.project_id:
+                raise HTTPException(status_code=400, detail="project_id is only supported for native Flow models")
             _require_geminigen_scope(auth_ctx)
             await _require_geminigen_model_enabled(normalized.model)
             payload = await _geminigen_openai_non_stream(
@@ -3197,9 +3223,10 @@ async def generate_content(
                 )
             )
 
-        allowed_token_ids, selected_project_id = await _select_random_active_project_for_api_key(
+        allowed_token_ids, selected_project_id = await _select_generation_target(
             auth_ctx,
             normalized.model,
+            normalized.project_id,
         )
         normalized = replace(normalized, project_id=selected_project_id)
         selection_context = _build_selection_context(auth_ctx, allowed_token_ids, selected_project_id)
@@ -3253,7 +3280,6 @@ async def stream_generate_content(
     try:
         if auth_ctx.key_id is None:
             raise HTTPException(status_code=403, detail="Managed API key required for generation")
-        _reject_explicit_project_id(request.project_id)
         base_allowed = _resolve_allowed_token_ids(auth_ctx)
         normalized = await _normalize_gemini_request(
             model,
@@ -3266,6 +3292,8 @@ async def stream_generate_content(
 
         request_base_url = _get_request_base_url(raw_request)
         if _is_geminigen_model(normalized.model):
+            if normalized.project_id:
+                raise HTTPException(status_code=400, detail="project_id is only supported for native Flow models")
             _require_geminigen_scope(auth_ctx)
             await _require_geminigen_model_enabled(normalized.model)
             return StreamingResponse(
@@ -3283,9 +3311,10 @@ async def stream_generate_content(
                 },
             )
 
-        allowed_token_ids, selected_project_id = await _select_random_active_project_for_api_key(
+        allowed_token_ids, selected_project_id = await _select_generation_target(
             auth_ctx,
             normalized.model,
+            normalized.project_id,
         )
         normalized = replace(normalized, project_id=selected_project_id)
         selection_context = _build_selection_context(auth_ctx, allowed_token_ids, selected_project_id)

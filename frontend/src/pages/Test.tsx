@@ -4,6 +4,7 @@ import { Button } from "../components/ui/button"
 import { Input } from "../components/ui/input"
 import { Label } from "../components/ui/label"
 import { ScrollArea } from "../components/ui/scroll-area"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select"
 import { toast } from "sonner"
 import { Play, UploadCloud, X, Beaker, CheckCircle2, Loader2, AlertCircle } from "lucide-react"
 import { cn } from "@/lib/utils"
@@ -108,6 +109,15 @@ const FALLBACK_MODELS: Record<string, string> = {
   "veo_3_1_r2v_fast_landscape_ultra_1080p": "Video upsample alias - explicit landscape ultra 1080P",
 }
 
+type FlowProject = {
+  project_id: string
+  project_name: string
+  token_id: number
+  is_active: boolean
+}
+
+const AUTOMATIC_PROJECT = "__automatic__"
+
 function getModelType(modelId: string) {
   if (modelId.includes("image") || modelId.startsWith("imagen")) return "image"
   return "video"
@@ -140,6 +150,10 @@ export default function TestPage() {
   )
   const [models, setModels] = useState<Record<string, string>>({})
   const [selectedModel, setSelectedModel] = useState<string | null>(null)
+  const [projects, setProjects] = useState<FlowProject[]>([])
+  const [selectedProject, setSelectedProject] = useState(AUTOMATIC_PROJECT)
+  const [projectsLoading, setProjectsLoading] = useState(false)
+  const [projectsError, setProjectsError] = useState("")
   const [images, setImages] = useState<string[]>([])
 
   const [generating, setGenerating] = useState(false)
@@ -188,13 +202,49 @@ export default function TestPage() {
     }
   }, [baseUrl, apiKey])
 
+  const loadProjects = useCallback(async () => {
+    const bu = baseUrl.trim()
+    const key = apiKey.trim()
+    if (!bu || !key) {
+      setProjects([])
+      setSelectedProject(AUTOMATIC_PROJECT)
+      setProjectsError("")
+      return
+    }
+    setProjectsLoading(true)
+    setProjectsError("")
+    try {
+      const resp = await fetch(`${bu}/v1/projects?limit=100`, {
+        headers: { Authorization: `Bearer ${key}` },
+      })
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+      const data = await resp.json()
+      const items = (Array.isArray(data.data) ? data.data : []) as FlowProject[]
+      const activeProjects = items.filter((project) => project.is_active)
+      setProjects(activeProjects)
+      setSelectedProject((current) =>
+        current === AUTOMATIC_PROJECT || activeProjects.some((project) => project.project_id === current)
+          ? current
+          : AUTOMATIC_PROJECT
+      )
+    } catch (error) {
+      console.warn("Load projects failed", error)
+      setProjects([])
+      setSelectedProject(AUTOMATIC_PROJECT)
+      setProjectsError("Could not load projects. Enable the projects:read scope for this API key.")
+    } finally {
+      setProjectsLoading(false)
+    }
+  }, [baseUrl, apiKey])
+
   useEffect(() => {
     if (!baseUrl) return
     const t = window.setTimeout(() => {
       void loadModels()
+      void loadProjects()
     }, 400)
     return () => window.clearTimeout(t)
-  }, [baseUrl, apiKey, loadModels])
+  }, [baseUrl, apiKey, loadModels, loadProjects])
 
   const ingestFiles = (files: FileList | File[]) => {
     const meta = selectedModel ? getModelMeta(selectedModel) : null
@@ -275,11 +325,17 @@ export default function TestPage() {
     })
 
     const messages = [{ role: "user", content: contentArr.length === 1 ? prompt : contentArr }]
-    const body = { model: selectedModel, messages, stream: true }
+    const body = {
+      model: selectedModel,
+      messages,
+      stream: true,
+      ...(selectedProject !== AUTOMATIC_PROJECT ? { project_id: selectedProject } : {}),
+    }
 
     const logTimeOpts = { hour: "2-digit" as const, minute: "2-digit" as const, second: "2-digit" as const, hour12: false }
     const logTime = new Date().toLocaleTimeString("en-US", logTimeOpts)
     appendLog(`[${logTime}] Model: ${selectedModel}\n`)
+    appendLog(`[${logTime}] Project: ${selectedProject === AUTOMATIC_PROJECT ? "Automatic" : selectedProject}\n`)
     appendLog(`[${logTime}] Prompt: ${prompt.substring(0, 100)}${prompt.length > 100 ? "..." : ""}\n`)
     appendLog(`[${logTime}] Starting request...\n`)
 
@@ -373,8 +429,25 @@ export default function TestPage() {
             <Label>Base URL</Label>
             <Input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder="http://localhost:8000" />
           </div>
-          <Button type="button" onClick={() => void loadModels()} variant="secondary">
-            Refresh models
+          <div className="flex-1 min-w-[250px] space-y-2">
+            <Label>Flow project</Label>
+            <Select value={selectedProject} onValueChange={setSelectedProject} disabled={projectsLoading || !apiKey.trim()}>
+              <SelectTrigger>
+                <SelectValue placeholder={projectsLoading ? "Loading projects…" : "Automatic"} />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={AUTOMATIC_PROJECT}>Automatic (recommended)</SelectItem>
+                {projects.map((project) => (
+                  <SelectItem key={project.project_id} value={project.project_id}>
+                    {project.project_name || project.project_id} · account #{project.token_id}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {projectsError && <p className="text-xs text-destructive">{projectsError}</p>}
+          </div>
+          <Button type="button" onClick={() => { void loadModels(); void loadProjects() }} variant="secondary">
+            Refresh
           </Button>
         </div>
         <p className="text-xs text-muted-foreground -mt-2">
